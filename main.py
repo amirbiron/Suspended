@@ -34,14 +34,14 @@ class RenderMonitorBot:
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """רשימת פקודות"""
-        message = "📋 *רשימת פקודות:*\n\n"
+        message = "📋 <b>רשימת פקודות:</b>\n\n"
         message += "/start - התחלה\n"
-        message += "/status - מצב כל השירותים\n"  
+        message += "/status - מצב כל השירותים\n"
         message += "/suspend - השעיית כל השירותים\n"
         message += "/resume - החזרת כל השירותים המושעים\n"
         message += "/list_suspended - רשימת שירותים מושעים\n"
         message += "/help - עזרה\n"
-        await update.message.reply_text(message, parse_mode="Markdown")
+        await update.message.reply_text(message, parse_mode="HTML")
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הצגת מצב כל השירותים"""
