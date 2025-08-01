@@ -110,20 +110,31 @@ CHECK_INTERVAL_HOURS = 24  # תדירות בדיקה
 
 ## 🔧 שימוש בבוטים שלך
 
-כדי שהמערכת תזהה פעילות בבוטים שלך, הוסף בכל בוט:
+כדי שהמערכת תזהה פעילות בבוטים שלך:
+
+### 1. העתק את `activity_reporter.py` לכל בוט
+
+### 2. הוסף בכל בוט 4 שורות בלבד:
 
 ```python
-from activity_tracker import activity_tracker
+# בראש הקובץ
+from activity_reporter import create_reporter
 
-# ברישום כל הודעה שמגיעה לבוט
+# הגדרה חד-פעמית
+reporter = create_reporter(
+    mongodb_uri="your_mongodb_connection_string",
+    service_id="srv-your-service-id-from-render",
+    service_name="שם הבוט שלך"  # אופציונלי
+)
+
+# בכל handler - שורה אחת!
 def handle_message(update, context):
-    # הרישום שלך כאן
-    activity_tracker.record_bot_usage(
-        service_id="srv-your-service-id",
-        user_id=update.effective_user.id,
-        service_name="שם הבוט שלך"
-    )
+    reporter.report_activity(update.effective_user.id)  # זה הכל!
+    
+    # השאר הלוגיקה שלך כרגיל...
 ```
+
+**זהו!** הבוט המרכזי יזהה את הפעילות אוטומטically.
 
 ## 🌐 הפעלה ב-Render
 
