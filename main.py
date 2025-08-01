@@ -47,6 +47,8 @@ class RenderMonitorBot:
         """הצגת מצב כל השירותים"""
         services = db.get_all_services()
         
+        print(f"נמצאו {len(services)} שירותים במסד הנתונים לבדיקה.")
+        
         if not services:
             await update.message.reply_text("אין שירותים רשומים במערכת")
             return
