@@ -18,8 +18,13 @@ DATABASE_NAME = "render_bot_monitor"
 # שירותים לניטור - רשימת service IDs של Render
 SERVICES_TO_MONITOR = [
     # דוגמאות - החלף במזהי השירותים שלך
-    "srv-c1234567890abcdef",
-    "srv-d1234567890fedcba"
+    "srv-d26cf32dbo4c73f27de0",
+    "srv-d26079be5dus73ctnegg",
+    "srv-d202d2i4d50c73b7u3pg",
+    "srv-d1vm4m7diees73bq7eh0",
+    "srv-d220g0je5dus7395phvg",
+    "srv-d1lk1mfdiees73fos2h0",
+    "srv-d1t3lijuibrs738s0af0",
 ]
 
 # הגדרות התראות
