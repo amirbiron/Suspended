@@ -1,5 +1,5 @@
 from pymongo import MongoClient
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import config
 
 class Database:
@@ -72,7 +72,7 @@ class Database:
         cutoff_date = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        cutoff_date = cutoff_date.replace(day=cutoff_date.day - days_inactive)
+        cutoff_date = cutoff_date - timedelta(days=days_inactive)
         
         return list(self.services.find({
             "$or": [
