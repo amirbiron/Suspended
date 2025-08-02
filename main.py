@@ -3,17 +3,20 @@ import schedule
 import time
 import threading
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 import config
 from database import db
+from render_api import render_api
 from activity_tracker import activity_tracker
 from notifications import send_notification, send_startup_notification, send_daily_report
 
 class RenderMonitorBot:
     def __init__(self):
         self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+        self.db = db
+        self.render_api = render_api
         self.setup_handlers()
         
     def setup_handlers(self):
@@ -24,6 +27,8 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("resume", self.resume_command))
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
+        self.app.add_handler(CommandHandler("suspend_one", self.suspend_one_command))
+        self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -81,23 +86,37 @@ class RenderMonitorBot:
         await update.message.reply_text(message, parse_mode="Markdown")
     
     async def suspend_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """השעיית כל השירותים"""
-        await update.message.reply_text("מתחיל השעיית שירותים...")
-        
-        messages = []
-        for service_id in config.SERVICES_TO_MONITOR:
-            result = activity_tracker.manual_suspend_service(service_id)
-            
-            service = db.get_service_activity(service_id)
-            service_name = service.get("service_name", service_id) if service else service_id
-            
-            if result["success"]:
-                messages.append(f"✅ {service_name} - הושעה בהצלחה")
-            else:
-                messages.append(f"❌ {service_name} - כשלון: {result['message']}")
-        
-        response = "תוצאות השעיה:\n\n" + "\n".join(messages)
-        await update.message.reply_text(response)
+        """שולח בקשת אישור להשעיית כל השירותים"""
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ כן, השעה הכל", callback_data="confirm_suspend_all"),
+                InlineKeyboardButton("❌ בטל", callback_data="cancel_suspend"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "⚠️ האם אתה בטוח שברצונך להשהות את <b>כל</b> השירותים?",
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+    
+    async def suspend_one_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """השעיית שירות ספציפי לפי ID"""
+        if not context.args:
+            await update.message.reply_text("יש לציין ID של שירות. לדוגמה: /suspend_one srv-12345")
+            return
+
+        service_id = context.args[0]
+        try:
+            print(f"Attempting to suspend service with ID: {service_id}")
+            self.render_api.suspend_service(service_id)
+            self.db.update_service_activity(service_id, status="suspended")
+            self.db.increment_suspend_count(service_id)
+            await update.message.reply_text(f"✅ השירות {service_id} הושהה בהצלחה.")
+            print(f"Successfully suspended service {service_id}.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ כישלון בהשעיית השירות {service_id}.\nשגיאה: {e}")
+            print(f"Failed to suspend service {service_id}. Error: {e}")
     
     async def resume_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """החזרת כל השירותים המושעים"""
@@ -145,6 +164,30 @@ class RenderMonitorBot:
             message += "\n"
         
         await update.message.reply_text(message, parse_mode="Markdown")
+
+    async def suspend_button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מטפל בלחיצה על כפתורי האישור להשעיה"""
+        query = update.callback_query
+        await query.answer()
+
+        if query.data == "confirm_suspend_all":
+            await query.edit_message_text(text="מאשר... מתחיל בתהליך השעיה כללי.")
+            services = self.db.get_all_services()
+            suspended_count = 0
+            for service in services:
+                if service.get("status") != "suspended":
+                    try:
+                        self.render_api.suspend_service(service['_id'])
+                        self.db.update_service_activity(service['_id'], status="suspended")
+                        self.db.increment_suspend_count(service['_id'])
+                        suspended_count += 1
+                    except Exception as e:
+                        print(f"Could not suspend service {service['_id']}: {e}")
+            
+            await query.edit_message_text(text=f"✅ הושלם. {suspended_count} שירותים הושהו.")
+
+        elif query.data == "cancel_suspend":
+            await query.edit_message_text(text="הפעולה בוטלה.")
 
 def run_scheduler():
     """הרצת המתזמן ברקע"""
