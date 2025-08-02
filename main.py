@@ -2,7 +2,7 @@ import asyncio
 import schedule
 import time
 import threading
-import logging
+
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -14,10 +14,13 @@ from render_api import render_api, RenderAPI
 from activity_tracker import activity_tracker
 from notifications import send_notification, send_startup_notification, send_daily_report
 
+import logging
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 class RenderMonitorBot:
     def __init__(self):
