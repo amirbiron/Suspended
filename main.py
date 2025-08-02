@@ -28,6 +28,9 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("suspend_one", self.suspend_one_command))
+        self.app.add_handler(CommandHandler("manage", self.manage_command))
+        self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
+        self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,6 +167,74 @@ class RenderMonitorBot:
             message += "\n"
         
         await update.message.reply_text(message, parse_mode="Markdown")
+
+    async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מציג תפריט ניהול עם כפתורים לכל שירות"""
+        services = self.db.get_all_services()
+        if not services:
+            await update.message.reply_text("לא נמצאו שירותים לניהול.")
+            return
+
+        keyboard = []
+        for service in services:
+            service_name = service.get("service_name", service['_id'])
+            # כל כפתור שולח callback עם קידומת ושם השירות
+            callback_data = f"manage_{service['_id']}"
+            keyboard.append([InlineKeyboardButton(service_name, callback_data=callback_data)])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("בחר שירות לניהול:", reply_markup=reply_markup)
+
+    async def manage_service_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מציג אפשרויות ניהול לשירות שנבחר"""
+        query = update.callback_query
+        await query.answer()
+
+        # מחלצים את ה-ID מה-callback_data
+        service_id = query.data.split('_')[1]
+        service = self.db.get_service_activity(service_id)
+        service_name = service.get("service_name", service_id) if service else service_id
+        status = service.get("status", "unknown") if service else "unknown"
+
+        # כפתורים להשעיה או הפעלה מחדש
+        keyboard = [
+            [
+                InlineKeyboardButton("🔴 השהה", callback_data=f"suspend_{service_id}"),
+                InlineKeyboardButton("🟢 הפעל מחדש", callback_data=f"resume_{service_id}")
+            ],
+            [InlineKeyboardButton("« חזור לרשימה", callback_data="back_to_manage")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            text=f"ניהול שירות: <b>{service_name}</b>\nסטטוס נוכחי: {status}",
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+
+    async def service_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מבצע פעולת השעיה או הפעלה על שירות"""
+        query = update.callback_query
+        await query.answer()
+
+        action, service_id = query.data.split('_')[0], '_'.join(query.data.split('_')[1:])
+
+        if action == "suspend":
+            try:
+                self.render_api.suspend_service(service_id)
+                self.db.update_service_activity(service_id, status="suspended")
+                await query.edit_message_text(text=f"✅ השירות {service_id} הושהה בהצלחה.")
+            except Exception as e:
+                await query.edit_message_text(text=f"❌ כישלון בהשעיית {service_id}: {e}")
+        elif action == "resume":
+            try:
+                self.render_api.resume_service(service_id)
+                self.db.update_service_activity(service_id, status="active")
+                await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
+            except Exception as e:
+                await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
+        elif action == "back":  # מטפל בכפתור "חזור"
+            # קורא מחדש לפונקציה המקורית כדי להציג את הרשימה
+            await self.manage_command(update.callback_query, context)
 
     async def suspend_button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מטפל בלחיצה על כפתורי האישור להשעיה"""
