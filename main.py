@@ -42,33 +42,34 @@ def cleanup_mongo_lock():
 def manage_mongo_lock():
     """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה עם יציאה נקייה."""
     pid = os.getpid()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc) # 'now' הוא מודע לאזור זמן (aware)
     
-    # בודקים אם קיים מנעול ישן
     lock = db.db.locks.find_one({"_id": LOCK_ID})
     if lock:
-        # בודקים אם המנעול ישן מאוד (למשל, יותר משעה) - סימן לתהליך שקרס
-        lock_time = lock.get("timestamp", now)
+        lock_time = lock.get("timestamp", now) # 'lock_time' מגיע מה-DB והוא תמים (naive)
+        
+        # --- התיקון נמצא כאן ---
+        # אם התאריך מה-DB הוא 'תמים', אנחנו הופכים אותו ל'מודע' עם אזור זמן UTC
+        if lock_time.tzinfo is None:
+            lock_time = lock_time.replace(tzinfo=timezone.utc)
+        
+        # עכשיו שני התאריכים מודעים וניתן לבצע חישוב
         if (now - lock_time) > timedelta(hours=1):
             print(f"WARNING: Found stale MongoDB lock from {lock_time}. Overwriting.")
             db.db.locks.delete_one({"_id": LOCK_ID})
         else:
-            # אם המנעול לא ישן, זה אומר שתהליך אחר רץ
             print(f"INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
             sys.exit(0)
 
-    # מנסים ליצור נעילה חדשה. פעולה זו תצליח רק אם אין מסמך עם אותו _id
     try:
         db.db.locks.insert_one({
             "_id": LOCK_ID,
             "pid": pid,
             "timestamp": now
         })
-        # אם הצלחנו, רושמים את פונקציית הניקוי
         atexit.register(cleanup_mongo_lock)
         print(f"INFO: MongoDB lock acquired by process {pid}.")
     except DuplicateKeyError:
-        # אם מישהו אחר יצר את הנעילה בדיוק באותו רגע
         print(f"INFO: Lock was acquired by another process just now. Exiting gracefully.")
         sys.exit(0)
     except Exception as e:
