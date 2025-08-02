@@ -2,15 +2,22 @@ import asyncio
 import schedule
 import time
 import threading
+import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.error import Conflict
 
 import config
 from database import db
-from render_api import render_api
+from render_api import render_api, RenderAPI
 from activity_tracker import activity_tracker
 from notifications import send_notification, send_startup_notification, send_daily_report
+
+# הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 
 class RenderMonitorBot:
     def __init__(self):
@@ -41,11 +48,12 @@ class RenderMonitorBot:
         await update.message.reply_text(message)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """רשימת פקודות"""
+        """רשימת פקודות מעודכנת"""
         message = "📋 <b>רשימת פקודות:</b>\n\n"
         message += "/start - התחלה\n"
-        message += "/status - מצב כל השירותים\n"
-        message += "/suspend - השעיית כל השירותים\n"
+        message += "/status - הצגת כל השירותים\n"
+        message += "/manage - ניהול שירותים (השעיה/הפעלה עם כפתורים)\n"
+        message += "/suspend - השעיית כל השירותים (עם אישור)\n"
         message += "/resume - החזרת כל השירותים המושעים\n"
         message += "/list_suspended - רשימת שירותים מושעים\n"
         message += "/help - עזרה\n"
@@ -260,6 +268,18 @@ class RenderMonitorBot:
         elif query.data == "cancel_suspend":
             await query.edit_message_text(text="הפעולה בוטלה.")
 
+# ✨ פונקציה שמטפלת בשגיאות
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """לוכד את כל השגיאות ושולח אותן ללוג."""
+    logger = logging.getLogger(__name__)
+    if isinstance(context.error, Conflict):
+        # מתמודד עם שגיאת הקונפליקט הנפוצה בשקט יחסי
+        logger.warning("⚠️ Conflict error detected, likely another bot instance is running. Ignoring.")
+        return  # יוצאים מהפונקציה כדי לא להדפיס את כל השגיאה הארוכה
+    
+    # עבור כל שגיאה אחרת, מדפיסים את המידע המלא
+    logging.error("❌ Exception while handling an update:", exc_info=context.error)
+
 def run_scheduler():
     """הרצת המתזמן ברקע"""
     # בדיקה יומית בשעה 09:00
@@ -291,6 +311,7 @@ def main():
     
     # יצירת בוט
     bot = RenderMonitorBot()
+    bot.app.add_error_handler(error_handler)  # רישום מטפל השגיאות
     
     # הפעלת המתזמן ברקע
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
