@@ -6,7 +6,9 @@ import os
 import sys
 import atexit
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+from pymongo.errors import DuplicateKeyError
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import Conflict
@@ -25,47 +27,53 @@ logging.basicConfig(
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# הגדרת שם קבוע לקובץ הנעילה
-LOCK_FILE = "bot.lock"
+# --- מנגנון נעילה חדש מבוסס MongoDB ---
 
-def cleanup_lock_file():
-    """[מקור 7] מנקה את קובץ הנעילה ביציאה"""
-    if os.path.exists(LOCK_FILE):
-        os.remove(LOCK_FILE)
-        print("INFO: Lock file cleaned up.")
+LOCK_ID = "render_monitor_bot_lock" # מזהה ייחודי למנעול שלנו
 
+def cleanup_mongo_lock():
+    """מנקה את נעילת ה-MongoDB ביציאה"""
+    try:
+        db.db.locks.delete_one({"_id": LOCK_ID})
+        print("INFO: MongoDB lock released.")
+    except Exception as e:
+        print(f"ERROR: Could not release MongoDB lock on exit: {e}")
 
-def manage_lock_file():
-    """
-    [מקור 2] מנהל את קובץ הנעילה כדי למנוע ריצה כפולה.
-    """
-    # [מקור 4] אם הקובץ כבר קיים, בודקים אותו
-    if os.path.exists(LOCK_FILE):
-        try:
-            with open(LOCK_FILE, "r") as f:
-                pid = int(f.read().strip())
-        except (IOError, ValueError):
-            # אם יש בעיה בקריאת הקובץ, מתייחסים אליו כאל קובץ יתום
-            pid = None
+def manage_mongo_lock():
+    """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה"""
+    pid = os.getpid()
+    now = datetime.now(timezone.utc)
+    
+    # בודקים אם קיים מנעול ישן
+    lock = db.db.locks.find_one({"_id": LOCK_ID})
+    if lock:
+        # בודקים אם המנעול ישן מאוד (למשל, יותר משעה) - סימן לתהליך שקרס
+        lock_time = lock.get("timestamp", now)
+        if (now - lock_time) > timedelta(hours=1):
+            print(f"WARNING: Found stale MongoDB lock from {lock_time}. Overwriting.")
+            db.db.locks.delete_one({"_id": LOCK_ID})
+        else:
+            # אם המנעול לא ישן, זה אומר שתהליך אחר רץ
+            print(f"ERROR: Lock document in MongoDB exists. Another instance (PID {lock.get('pid')}) is likely running. Exiting.")
+            sys.exit(1)
 
-        if pid:
-            # בדיקה אם התהליך עם ה-PID הרשום עדיין חי
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                # [מקור 6] התהליך מת, מנקים את הקובץ הישן
-                print(f"WARNING: Found stale lock file for dead process {pid}. Cleaning up.")
-                cleanup_lock_file()
-            else:
-                # [מקור 5] התהליך עדיין חי, יוצאים מהתוכנית החדשה
-                print(f"ERROR: Another instance of the bot (PID: {pid}) is already running. Exiting.")
-                sys.exit(1)  # יציאה מיידית כדי למנוע קונפליקט
-
-    # [מקור 3] יוצרים קובץ נעילה חדש ורושמים את ה-PID הנוכחי
-    atexit.register(cleanup_lock_file)
-    with open(LOCK_FILE, "w") as f:
-        f.write(str(os.getpid()))
-    print(f"INFO: Lock file created for process {os.getpid()}.")
+    # מנסים ליצור נעילה חדשה. פעולה זו תצליח רק אם אין מסמך עם אותו _id
+    try:
+        db.db.locks.insert_one({
+            "_id": LOCK_ID,
+            "pid": pid,
+            "timestamp": now
+        })
+        # אם הצלחנו, רושמים את פונקציית הניקוי
+        atexit.register(cleanup_mongo_lock)
+        print(f"INFO: MongoDB lock acquired by process {pid}.")
+    except DuplicateKeyError:
+        # אם מישהו אחר יצר את הנעילה בדיוק באותו רגע
+        print(f"ERROR: Lock was acquired by another process just now. Exiting.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: Failed to acquire MongoDB lock: {e}")
+        sys.exit(1)
 
 class RenderMonitorBot:
     def __init__(self):
@@ -342,7 +350,7 @@ def run_scheduler():
 
 def main():
     """פונקציה ראשית"""
-    manage_lock_file()
+    manage_mongo_lock()
     print("🚀 מפעיל בוט ניטור Render...")
     
     # בדיקת הגדרות חיוניות
