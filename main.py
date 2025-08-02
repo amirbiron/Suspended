@@ -40,7 +40,7 @@ def cleanup_mongo_lock():
         print(f"ERROR: Could not release MongoDB lock on exit: {e}")
 
 def manage_mongo_lock():
-    """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה"""
+    """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה עם יציאה נקייה."""
     pid = os.getpid()
     now = datetime.now(timezone.utc)
     
@@ -54,8 +54,8 @@ def manage_mongo_lock():
             db.db.locks.delete_one({"_id": LOCK_ID})
         else:
             # אם המנעול לא ישן, זה אומר שתהליך אחר רץ
-            print(f"ERROR: Lock document in MongoDB exists. Another instance (PID {lock.get('pid')}) is likely running. Exiting.")
-            sys.exit(1)
+            print(f"INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
+            sys.exit(0)
 
     # מנסים ליצור נעילה חדשה. פעולה זו תצליח רק אם אין מסמך עם אותו _id
     try:
@@ -69,8 +69,8 @@ def manage_mongo_lock():
         print(f"INFO: MongoDB lock acquired by process {pid}.")
     except DuplicateKeyError:
         # אם מישהו אחר יצר את הנעילה בדיוק באותו רגע
-        print(f"ERROR: Lock was acquired by another process just now. Exiting.")
-        sys.exit(1)
+        print(f"INFO: Lock was acquired by another process just now. Exiting gracefully.")
+        sys.exit(0)
     except Exception as e:
         print(f"ERROR: Failed to acquire MongoDB lock: {e}")
         sys.exit(1)
