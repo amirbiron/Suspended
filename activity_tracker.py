@@ -110,6 +110,7 @@ class ActivityTracker:
         if result["success"]:
             # עדכון במסד הנתונים
             db.update_service_activity(service_id, status="suspended")
+            db.update_last_known_status(service_id, "suspended")
             db.increment_suspend_count(service_id)
             print(f"שירות {service_name} הושעה ידנית בהצלחה")
         else:
@@ -131,6 +132,7 @@ class ActivityTracker:
         if result["success"]:
             # עדכון במסד הנתונים
             db.update_service_activity(service_id, status="active")
+            db.update_last_known_status(service_id, "active")
             
             # שליחת התראה על החזרה מוצלחת
             message = f"✅ החזרה לפעילות מוצלחת\n"
