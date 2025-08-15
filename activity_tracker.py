@@ -38,6 +38,8 @@ class ActivityTracker:
         # בדיקה אם כבר נשלחה התראה היום
         last_alert = service.get("notification_settings", {}).get("last_alert_sent")
         if last_alert:
+            if last_alert.tzinfo is None:
+                last_alert = last_alert.replace(tzinfo=timezone.utc)
             time_since_alert = datetime.now(timezone.utc) - last_alert
             if time_since_alert.days < 1:
                 return  # כבר נשלחה התראה היום
@@ -45,6 +47,8 @@ class ActivityTracker:
         # חישוב ימי חוסר פעילות
         last_activity = service.get("last_user_activity")
         if last_activity:
+            if last_activity.tzinfo is None:
+                last_activity = last_activity.replace(tzinfo=timezone.utc)
             inactive_days = (datetime.now(timezone.utc) - last_activity).days
         else:
             inactive_days = "לא ידוע"

@@ -60,7 +60,14 @@ def send_daily_report():
             name = service.get("service_name", service["_id"])
             suspended_at = service.get("suspended_at")
             if suspended_at:
-                days_suspended = (datetime.now() - suspended_at).days
+                try:
+                    from datetime import timezone
+                    if suspended_at.tzinfo is None:
+                        suspended_at = suspended_at.replace(tzinfo=timezone.utc)
+                    days_suspended = (datetime.now(timezone.utc) - suspended_at).days
+                except Exception:
+                    # Fallback: treat as naive
+                    days_suspended = (datetime.now() - suspended_at.replace(tzinfo=None)).days
                 message += f"• {name} (מושעה {days_suspended} ימים)\n"
             else:
                 message += f"• {name}\n"
