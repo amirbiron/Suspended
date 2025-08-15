@@ -103,6 +103,54 @@ class Database:
             {"_id": service_id},
             {"$inc": {"suspend_count": 1}}
         )
+    
+    # --- ניטור סטטוס Render ---
+    def update_render_status(self, service_id, render_status, service_name=None):
+        """עדכון סטטוס אחרון שהגיע מ-Render"""
+        update = {
+            "render_status": render_status,
+            "render_status_updated_at": datetime.now(timezone.utc)
+        }
+        if service_name:
+            update["service_name"] = service_name
+        self.services.update_one(
+            {"_id": service_id},
+            {
+                "$set": update,
+                "$setOnInsert": {
+                    "created_at": datetime.now(timezone.utc),
+                    "total_users": 0,
+                    "suspend_count": 0,
+                    "notification_settings": {
+                        "alert_after_days": config.INACTIVE_DAYS_ALERT,
+                        "auto_suspend_after_days": config.AUTO_SUSPEND_DAYS,
+                        "last_alert_sent": None
+                    }
+                }
+            },
+            upsert=True
+        )
+    
+    def record_our_action(self, service_id, action_type):
+        """רישום פעולה שבוצעה על-ידי הבוט (לצורך חלון השתקה)"""
+        self.services.update_one(
+            {"_id": service_id},
+            {
+                "$set": {
+                    "last_our_action_type": action_type,
+                    "last_our_action_at": datetime.now(timezone.utc)
+                }
+            },
+            upsert=True
+        )
+    
+    def record_transient_status_seen(self, service_id):
+        """רישום זמן בו זוהה סטטוס ביניים (דיפלוי/בניה) לצורך השתקת התראות"""
+        self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"last_transient_status_at": datetime.now(timezone.utc)}},
+            upsert=True
+        )
 
 # יצירת instance גלובלי
 db = Database()

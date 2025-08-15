@@ -80,6 +80,22 @@ AUTO_SUSPEND_DAYS = 7    # השעיה אוטומטית אחרי כמה ימים
 CHECK_INTERVAL_HOURS = 24  # תדירות בדיקה
 ```
 
+### ניטור עליות/נפילות (לא יזומות)
+כדי לקבל התראות כאשר שירותים עולים/נופלים שלא בעקבות פעולה שלכם או דיפלוי:
+
+- הוסיפו ל-`.env`:
+```env
+ENABLE_STATE_MONITOR=true
+STATUS_POLL_INTERVAL_MINUTES=1
+ALERT_SUPPRESSION_MINUTES_AFTER_OUR_ACTION=10
+DEPLOY_SUPPRESSION_MINUTES=10
+```
+- ניתן להתאים את רשימות המצבים ב-`config.py`:
+  - `RENDER_TRANSIENT_STATUSES` - סטטוסים זמניים בדיפלוי/בניה שלהם לא שולחים התראות
+  - `RENDER_DOWN_STATUSES` - סטטוסים שנחשבים DOWN (למשל: `suspended`, `failed`, `crashed`)
+
+המערכת מזהה חלונות דיפלוי ע"י סטטוסים זמניים ומדכאת התראות באותו חלון, וכן מדכאת התראות לזמן קצר אחרי פעולות שהבוט מבצע (כמו `/suspend` או `/resume`).
+
 ## 📊 מבנה מסד הנתונים
 
 ### Collection: service_activity

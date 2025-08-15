@@ -34,3 +34,24 @@ CHECK_INTERVAL_HOURS = 24  # בדיקה כל כמה שעות
 
 # הגדרות כלליות
 TIMEZONE = "Asia/Jerusalem"
+
+# --- ניטור סטטוס שירותים (UP/DOWN) ---
+ENABLE_STATE_MONITOR = os.getenv("ENABLE_STATE_MONITOR", "false").lower() in ("1", "true", "yes")
+STATUS_POLL_INTERVAL_MINUTES = int(os.getenv("STATUS_POLL_INTERVAL_MINUTES", "1"))
+
+# חלונות השתקה כדי לא לשלוח התראות שנגרמות מפעולה שלנו / דיפלוי
+ALERT_SUPPRESSION_MINUTES_AFTER_OUR_ACTION = int(os.getenv("ALERT_SUPPRESSION_MINUTES_AFTER_OUR_ACTION", "10"))
+DEPLOY_SUPPRESSION_MINUTES = int(os.getenv("DEPLOY_SUPPRESSION_MINUTES", "10"))
+
+# מצבי ביניים של Render (במהלך בניה/דיפלוי) שבהם לא נשלחות התראות
+RENDER_TRANSIENT_STATUSES = [
+    "deploy_in_progress",
+    "build_in_progress",
+]
+
+# מצבים שנחשבים DOWN
+RENDER_DOWN_STATUSES = [
+    "suspended",
+    "failed",
+    "crashed",
+]

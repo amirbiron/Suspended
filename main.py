@@ -18,6 +18,7 @@ from database import db
 from render_api import render_api, RenderAPI
 from activity_tracker import activity_tracker
 from notifications import send_notification, send_startup_notification, send_daily_report
+from state_monitor import state_monitor
 
 import logging
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
@@ -182,6 +183,7 @@ class RenderMonitorBot:
             self.render_api.suspend_service(service_id)
             self.db.update_service_activity(service_id, status="suspended")
             self.db.increment_suspend_count(service_id)
+            self.db.record_our_action(service_id, action_type="manual_suspend")
             await update.message.reply_text(f"✅ השירות {service_id} הושהה בהצלחה.")
             print(f"Successfully suspended service {service_id}.")
         except Exception as e:
@@ -291,6 +293,7 @@ class RenderMonitorBot:
             try:
                 self.render_api.suspend_service(service_id)
                 self.db.update_service_activity(service_id, status="suspended")
+                self.db.record_our_action(service_id, action_type="manual_suspend")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הושהה בהצלחה.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהשעיית {service_id}: {e}")
@@ -298,6 +301,7 @@ class RenderMonitorBot:
             try:
                 self.render_api.resume_service(service_id)
                 self.db.update_service_activity(service_id, status="active")
+                self.db.record_our_action(service_id, action_type="manual_resume")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
@@ -320,6 +324,7 @@ class RenderMonitorBot:
                         self.render_api.suspend_service(service['_id'])
                         self.db.update_service_activity(service['_id'], status="suspended")
                         self.db.increment_suspend_count(service['_id'])
+                        self.db.record_our_action(service['_id'], action_type="manual_suspend")
                         suspended_count += 1
                     except Exception as e:
                         print(f"Could not suspend service {service['_id']}: {e}")
@@ -348,6 +353,10 @@ def run_scheduler():
     
     # דוח יומי בשעה 20:00
     schedule.every().day.at("20:00").do(send_daily_report)
+    
+    # ניטור סטטוסים שוטף
+    if config.ENABLE_STATE_MONITOR:
+        schedule.every(config.STATUS_POLL_INTERVAL_MINUTES).minutes.do(state_monitor.check_services_state)
     
     while True:
         schedule.run_pending()
@@ -385,6 +394,8 @@ def main():
     # בדיקה ראשונית
     print("מבצע בדיקה ראשונית...")
     activity_tracker.check_inactive_services()
+    if config.ENABLE_STATE_MONITOR:
+        state_monitor.check_services_state()
     
     print("✅ הבוט פועל! לחץ Ctrl+C להפסקה")
     
