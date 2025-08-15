@@ -19,7 +19,7 @@ def send_notification(message: str):
         print(f"⚠️ שגיאה בבדיקת mute: {e}")
     
     if not config.ADMIN_CHAT_ID or not config.TELEGRAM_BOT_TOKEN:
-        print("⚠️ לא מוגדר ADMIN_CHAT_ID או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה")
+        print("⚠️ לא מוגדר ADMIN_CHAT_ID או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה (הודעה תודפס ללוג)")
         print(f"הודעה: {message}")
         return False
     
@@ -33,8 +33,7 @@ def send_notification(message: str):
     
     payload = {
         "chat_id": config.ADMIN_CHAT_ID,
-        "text": formatted_message,
-        "parse_mode": "Markdown"
+        "text": formatted_message
     }
     
     try:
