@@ -86,7 +86,6 @@ class RenderMonitorBot:
     def setup_handlers(self):
         """הוספת command handlers"""
         self.app.add_handler(CommandHandler("start", self.start_command))
-        self.app.add_handler(CommandHandler("menu", self.main_menu_command))
         self.app.add_handler(CommandHandler("status", self.status_command))
         self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(CommandHandler("suspend", self.suspend_command))
@@ -95,10 +94,7 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("suspend_one", self.suspend_one_command))
         # --- גיבויים ונקודות שמירה ---
-        self.app.add_handler(CommandHandler("backup", self.backup_menu_command))
-        self.app.add_handler(CallbackQueryHandler(self.backup_callback, pattern="^backup_"))
         # --- תפריט ראשי ---
-        self.app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^menu_"))
         # --- קיימים ---
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
@@ -108,20 +104,18 @@ class RenderMonitorBot:
         """פקודת התחלה"""
         message = "🤖 שלום! זה בוט ניטור Render\n\n"
         message += "הבוט מנטר את השירותים שלך ומשעה אותם אוטומטית במידת הצורך.\n\n"
-        message += "הקש /help לרשימת פקודות או /menu לתפריט כפתורים"
+        message += "הקש /help לרשימת פקודות"
         await update.message.reply_text(message)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """רשימת פקודות מעודכנת"""
         message = "📋 <b>רשימת פקודות:</b>\n\n"
-        message += "/menu - תפריט ראשי\n"
         message += "/start - התחלה\n"
         message += "/status - הצגת כל השירותים\n"
         message += "/manage - ניהול שירותים (השעיה/הפעלה עם כפתורים)\n"
         message += "/suspend - השעיית כל השירותים (עם אישור)\n"
         message += "/resume - החזרת כל השירותים המושעים\n"
         message += "/list_suspended - רשימת שירותים מושעים\n"
-        message += "/backup - גיבוי/נ. שמירה\n"
         message += "/help - עזרה\n"
         await update.message.reply_text(message, parse_mode="HTML")
 
