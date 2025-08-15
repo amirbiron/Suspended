@@ -86,6 +86,7 @@ class RenderMonitorBot:
     def setup_handlers(self):
         """הוספת command handlers"""
         self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CommandHandler("menu", self.main_menu_command))
         self.app.add_handler(CommandHandler("status", self.status_command))
         self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(CommandHandler("suspend", self.suspend_command))
@@ -96,6 +97,8 @@ class RenderMonitorBot:
         # --- גיבויים ונקודות שמירה ---
         self.app.add_handler(CommandHandler("backup", self.backup_menu_command))
         self.app.add_handler(CallbackQueryHandler(self.backup_callback, pattern="^backup_"))
+        # --- תפריט ראשי ---
+        self.app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^menu_"))
         # --- קיימים ---
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
@@ -105,12 +108,13 @@ class RenderMonitorBot:
         """פקודת התחלה"""
         message = "🤖 שלום! זה בוט ניטור Render\n\n"
         message += "הבוט מנטר את השירותים שלך ומשעה אותם אוטומטית במידת הצורך.\n\n"
-        message += "הקש /help לרשימת פקודות"
+        message += "הקש /help לרשימת פקודות או /menu לתפריט כפתורים"
         await update.message.reply_text(message)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """רשימת פקודות מעודכנת"""
         message = "📋 <b>רשימת פקודות:</b>\n\n"
+        message += "/menu - תפריט ראשי\n"
         message += "/start - התחלה\n"
         message += "/status - הצגת כל השירותים\n"
         message += "/manage - ניהול שירותים (השעיה/הפעלה עם כפתורים)\n"
@@ -120,22 +124,48 @@ class RenderMonitorBot:
         message += "/backup - גיבוי/נ. שמירה\n"
         message += "/help - עזרה\n"
         await update.message.reply_text(message, parse_mode="HTML")
-    
+
+    # --- תפריט ראשי ---
+    async def main_menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        keyboard = [
+            [InlineKeyboardButton("⚙️ ניהול שירותים", callback_data="menu_manage")],
+            [InlineKeyboardButton("🛟 גיבוי/נ. שמירה", callback_data="menu_backup")]
+        ]
+        await update.message.reply_text("בחר אפשרות:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data == "menu_manage":
+            await self.manage_command(update, context)
+        elif data == "menu_backup":
+            await self.backup_menu_command(update, context)
+
     # --- תפריט גיבוי/נ. שמירה ---
     async def backup_menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("📦 צור גיבוי עכשיו", callback_data="backup_create")],
             [InlineKeyboardButton("🗂️ רשימת גיבויים", callback_data="backup_list")],
-            [InlineKeyboardButton("🔁 שחזר גיבוי אחרון", callback_data="backup_restore_latest")]
+            [InlineKeyboardButton("🔁 שחזר גיבוי אחרון", callback_data="backup_restore_latest")],
+            [InlineKeyboardButton("⬅️ חזרה לתפריט ראשי", callback_data="menu_root")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("בחר פעולה לניהול גיבויים ונקודות שמירה:", reply_markup=reply_markup)
+        # תומך גם בשיחה חדשה וגם בעריכה של הודעת כפתורים קיימת
+        if update.message:
+            await update.message.reply_text("בחר פעולה לניהול גיבויים ונקודות שמירה:", reply_markup=reply_markup)
+        else:
+            await update.callback_query.edit_message_text("בחר פעולה לניהול גיבויים ונקודות שמירה:", reply_markup=reply_markup)
 
     async def backup_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         data = query.data
         backups_dir = "/workspace/_backups"
+
+        if data == "menu_root":
+            await self.main_menu_command(update, context)
+            return
 
         # יצירת גיבוי
         if data == "backup_create":
