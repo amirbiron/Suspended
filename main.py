@@ -209,6 +209,7 @@ class RenderMonitorBot:
             print(f"Attempting to suspend service with ID: {service_id}")
             self.render_api.suspend_service(service_id)
             self.db.update_service_activity(service_id, status="suspended")
+            self.db.update_last_known_status(service_id, "suspended")
             self.db.increment_suspend_count(service_id)
             await update.message.reply_text(f"✅ השירות {service_id} הושהה בהצלחה.")
             print(f"Successfully suspended service {service_id}.")
@@ -320,6 +321,7 @@ class RenderMonitorBot:
             try:
                 self.render_api.suspend_service(service_id)
                 self.db.update_service_activity(service_id, status="suspended")
+                self.db.update_last_known_status(service_id, "suspended")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הושהה בהצלחה.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהשעיית {service_id}: {e}")
@@ -327,6 +329,7 @@ class RenderMonitorBot:
             try:
                 self.render_api.resume_service(service_id)
                 self.db.update_service_activity(service_id, status="active")
+                self.db.update_last_known_status(service_id, "active")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
@@ -348,6 +351,7 @@ class RenderMonitorBot:
                     try:
                         self.render_api.suspend_service(service['_id'])
                         self.db.update_service_activity(service['_id'], status="suspended")
+                        self.db.update_last_known_status(service['_id'], "suspended")
                         self.db.increment_suspend_count(service['_id'])
                         suspended_count += 1
                     except Exception as e:
