@@ -9,7 +9,7 @@ import atexit
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import Conflict
 
@@ -79,10 +79,26 @@ def manage_mongo_lock():
 
 class RenderMonitorBot:
     def __init__(self):
-        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).post_init(self._post_init).build()
         self.db = db
         self.render_api = render_api
         self.setup_handlers()
+        
+    async def _post_init(self, app: Application):
+        commands = [
+            BotCommand("start", "התחלה"),
+            BotCommand("help", "עזרה"),
+            BotCommand("status", "מצב כל השירותים"),
+            BotCommand("manage", "ניהול שירותים"),
+            BotCommand("suspend", "השעיית כל השירותים"),
+            BotCommand("resume", "החזרת שירותים מושעים"),
+            BotCommand("list_suspended", "רשימת שירותים מושעים"),
+            BotCommand("alerts", "בחירת שירותים להתראות זמינות"),
+            BotCommand("mute", "השתקת התראות לזמן מוגבל"),
+            BotCommand("unmute", "ביטול השתקת התראות")
+        ]
+        await app.bot.set_my_commands(commands)
+        logging.info("Bot commands menu set")
         
     def setup_handlers(self):
         """הוספת command handlers"""
