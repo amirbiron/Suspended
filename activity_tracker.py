@@ -45,7 +45,11 @@ class ActivityTracker:
         # חישוב ימי חוסר פעילות
         last_activity = service.get("last_user_activity")
         if last_activity:
-            inactive_days = (datetime.now(timezone.utc) - last_activity).days
+            # ודא ששני התאריכים ברי-השוואה (שניהם timezone-aware ב-UTC)
+            now_utc = datetime.now(timezone.utc)
+            if last_activity.tzinfo is None:
+                last_activity = last_activity.replace(tzinfo=timezone.utc)
+            inactive_days = (now_utc - last_activity).days
         else:
             inactive_days = "לא ידוע"
         
