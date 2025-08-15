@@ -311,6 +311,35 @@ class RenderMonitorBot:
         keyboard = [[InlineKeyboardButton("✅ כן, השעה הכל", callback_data="confirm_suspend_all"), InlineKeyboardButton("❌ בטל", callback_data="cancel_suspend")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text("⚠️ האם אתה בטוח שברצונך להשהות את <b>כל</b> השירותים?", reply_markup=reply_markup, parse_mode="HTML")
+
+    async def suspend_button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מטפל בלחצני האישור/ביטול להשעיית כל השירותים"""
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        
+        if data == "cancel_suspend":
+            await query.edit_message_text("בוטל.")
+            return
+        
+        if data == "confirm_suspend_all":
+            services = self.db.get_all_services()
+            if not services:
+                await query.edit_message_text("אין שירותים להשעות.")
+                return
+            
+            messages = []
+            for service in services:
+                service_id = service["_id"]
+                service_name = service.get("service_name", service_id)
+                result = activity_tracker.manual_suspend_service(service_id)
+                if result.get("success"):
+                    messages.append(f"✅ {service_name} - הושעה")
+                else:
+                    messages.append(f"❌ {service_name} - כשלון: {result.get('message')}")
+            
+            await query.edit_message_text("תוצאות השעיה:\n\n" + "\n".join(messages))
+            return
     
     async def suspend_one_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """השעיית שירות ספציפי לפי ID"""
@@ -380,7 +409,10 @@ class RenderMonitorBot:
         """מציג תפריט ניהול עם כפתורים לכל שירות"""
         services = self.db.get_all_services()
         if not services:
-            await update.message.reply_text("לא נמצאו שירותים לניהול.")
+            if update.message:
+                await update.message.reply_text("לא נמצאו שירותים לניהול.")
+            else:
+                await update.callback_query.edit_message_text("לא נמצאו שירותים לניהול.")
             return
 
         keyboard = []
@@ -391,7 +423,10 @@ class RenderMonitorBot:
             keyboard.append([InlineKeyboardButton(service_name, callback_data=callback_data)])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("בחר שירות לניהול:", reply_markup=reply_markup)
+        if update.message:
+            await update.message.reply_text("בחר שירות לניהול:", reply_markup=reply_markup)
+        else:
+            await update.callback_query.edit_message_text("בחר שירות לניהול:", reply_markup=reply_markup)
 
     async def manage_service_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מציג אפשרויות ניהול לשירות שנבחר"""
@@ -445,6 +480,7 @@ class RenderMonitorBot:
             await self.manage_command(update.callback_query, context)
 
     # ✨ פונקציה שמטפלת בשגיאות
+    @staticmethod
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         """לוכד את כל השגיאות ושולח אותן ללוג."""
         logger = logging.getLogger(__name__)
@@ -490,7 +526,7 @@ def main():
     
     # יצירת בוט
     bot = RenderMonitorBot()
-    bot.app.add_error_handler(error_handler)  # רישום מטפל השגיאות
+    bot.app.add_error_handler(RenderMonitorBot.error_handler)  # רישום מטפל השגיאות
     
     # הפעלת המתזמן ברקע
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
