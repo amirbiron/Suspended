@@ -48,6 +48,10 @@ STATE_ALERT_COOLDOWN_MINUTES = int(os.getenv("STATE_ALERT_COOLDOWN_MINUTES", "5"
 RENDER_TRANSIENT_STATUSES = [
     "deploy_in_progress",
     "build_in_progress",
+    "update_in_progress",
+    "starting",
+    "stopping",
+    "restarting",
 ]
 
 # מצבים שנחשבים DOWN
@@ -56,6 +60,16 @@ RENDER_DOWN_STATUSES = [
     "failed",
     "crashed",
 ]
+
+# --- Heuristics כדי שלא תצטרך פקודות ---
+REQUIRE_CONSECUTIVE_POLLS_FOR_ALERT = int(os.getenv("REQUIRE_CONSECUTIVE_POLLS_FOR_ALERT", "2"))
+MIN_DOWN_DURATION_MINUTES = int(os.getenv("MIN_DOWN_DURATION_MINUTES", "3"))
+ONLY_ALERT_UP_IF_PREVIOUS_DOWN_ALERT = os.getenv("ONLY_ALERT_UP_IF_PREVIOUS_DOWN_ALERT", "true").lower() in ("1", "true", "yes")
+PREVIOUS_DOWN_LOOKBACK_HOURS = int(os.getenv("PREVIOUS_DOWN_LOOKBACK_HOURS", "24"))
+
+AUTO_DEPLOY_WINDOW_AUTODETECT = os.getenv("AUTO_DEPLOY_WINDOW_AUTODETECT", "true").lower() in ("1", "true", "yes")
+AUTO_DEPLOY_WINDOW_THRESHOLD_SERVICES = int(os.getenv("AUTO_DEPLOY_WINDOW_THRESHOLD_SERVICES", "2"))
+AUTO_DEPLOY_WINDOW_MINUTES = int(os.getenv("AUTO_DEPLOY_WINDOW_MINUTES", "15"))
 
 # --- Webhooks ל-CI לציון חלון דיפלוי ---
 ENABLE_CI_HTTP_HOOKS = os.getenv("ENABLE_CI_HTTP_HOOKS", "false").lower() in ("1", "true", "yes")

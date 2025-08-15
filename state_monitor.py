@@ -75,11 +75,27 @@ class StateMonitor:
             # לא שינוי בכיוון (עדיין DOWN או עדיין UP) – לא מתריעים
             return
 
+        # דרישת ריצופי פולינג כדי לצמצם רעש
+        consecutive = service_doc.get("consecutive_same_status_polls") or 1
+        changed_at = service_doc.get("render_status_changed_at")
+        if changed_at and changed_at.tzinfo is None:
+            changed_at = changed_at.replace(tzinfo=timezone.utc)
+        if consecutive < config.REQUIRE_CONSECUTIVE_POLLS_FOR_ALERT:
+            return
+        if is_down and changed_at:
+            if (datetime.now(timezone.utc) - changed_at) < timedelta(minutes=config.MIN_DOWN_DURATION_MINUTES):
+                return
+
         if self._should_suppress_due_to_our_action(service_doc) or self._should_suppress_due_to_deploy(service_doc):
             return
 
         if self._is_in_cooldown(service_doc):
             return
+
+        # לא לשלוח UP אם לא הייתה התראת DOWN לאחרונה (אופציונלי)
+        if (not is_down) and config.ONLY_ALERT_UP_IF_PREVIOUS_DOWN_ALERT:
+            if not db.was_down_alert_sent_recently(service_id, config.PREVIOUS_DOWN_LOOKBACK_HOURS):
+                return
 
         if is_down:
             message = format_down_alert(service_name, service_id, new_status or "unknown")
@@ -87,6 +103,8 @@ class StateMonitor:
             message = format_up_alert(service_name, service_id, new_status or "unknown")
         if send_notification(message):
             db.set_last_state_alert(service_id)
+            if is_down:
+                db.mark_down_alert_sent(service_id)
 
     def check_services_state(self):
         """פולינג סטטוסי שירותים ב-Render ושליחת התראות על שינויי UP/DOWN"""

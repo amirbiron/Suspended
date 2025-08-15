@@ -107,18 +107,31 @@ class Database:
     # --- ניטור סטטוס Render ---
     def update_render_status(self, service_id, render_status, service_name=None):
         """עדכון סטטוס אחרון שהגיע מ-Render"""
+        now = datetime.now(timezone.utc)
         update = {
             "render_status": render_status,
-            "render_status_updated_at": datetime.now(timezone.utc)
+            "render_status_updated_at": now
         }
         if service_name:
             update["service_name"] = service_name
+        # שמירת transition
+        doc = self.get_service_activity(service_id) or {}
+        last_status = doc.get("render_status")
+        if last_status != render_status:
+            update["render_status_changed_at"] = now
+            update["consecutive_same_status_polls"] = 1
+        else:
+            # נבצע אינקרמנט אם אותו סטטוס
+            self.services.update_one(
+                {"_id": service_id},
+                {"$inc": {"consecutive_same_status_polls": 1}}
+            )
         self.services.update_one(
             {"_id": service_id},
             {
                 "$set": update,
                 "$setOnInsert": {
-                    "created_at": datetime.now(timezone.utc),
+                    "created_at": now,
                     "total_users": 0,
                     "suspend_count": 0,
                     "notification_settings": {
@@ -130,6 +143,21 @@ class Database:
             },
             upsert=True
         )
+
+    def mark_down_alert_sent(self, service_id):
+        self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"last_down_alert_at": datetime.now(timezone.utc)}}
+        )
+
+    def was_down_alert_sent_recently(self, service_id, lookback_hours: int) -> bool:
+        doc = self.get_service_activity(service_id) or {}
+        ts = doc.get("last_down_alert_at")
+        if not ts:
+            return False
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts) <= timedelta(hours=lookback_hours)
     
     def record_our_action(self, service_id, action_type):
         """רישום פעולה שבוצעה על-ידי הבוט (לצורך חלון השתקה)"""
