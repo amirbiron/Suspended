@@ -43,7 +43,9 @@ class Database:
                         "alert_after_days": config.INACTIVE_DAYS_ALERT,
                         "auto_suspend_after_days": config.AUTO_SUSPEND_DAYS,
                         "last_alert_sent": None
-                    }
+                    },
+                    "uptime_monitor": False,
+                    "last_known_status": None
                 }
             },
             upsert=True
@@ -103,6 +105,43 @@ class Database:
             {"_id": service_id},
             {"$inc": {"suspend_count": 1}}
         )
+    
+    # --- Uptime monitoring helpers ---
+    def set_uptime_monitor(self, service_id: str, enabled: bool):
+        self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"uptime_monitor": enabled}},
+            upsert=True
+        )
+    
+    def get_monitored_services(self):
+        return list(self.services.find({"uptime_monitor": True}))
+    
+    def update_last_known_status(self, service_id: str, status: str):
+        self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"last_known_status": status, "updated_at": datetime.now(timezone.utc)}},
+            upsert=True
+        )
+    
+    # --- Global settings for notifications (deploy mute) ---
+    def get_notifications_mute_until(self):
+        doc = self.db.settings.find_one({"_id": "notifications"})
+        return doc.get("mute_until") if doc else None
+    
+    def set_notifications_mute_until(self, until_dt):
+        if until_dt is None:
+            self.db.settings.update_one(
+                {"_id": "notifications"},
+                {"$unset": {"mute_until": ""}},
+                upsert=True
+            )
+        else:
+            self.db.settings.update_one(
+                {"_id": "notifications"},
+                {"$set": {"mute_until": until_dt}},
+                upsert=True
+            )
 
 # יצירת instance גלובלי
 db = Database()

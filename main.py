@@ -9,7 +9,7 @@ import atexit
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import Conflict
 
@@ -18,6 +18,7 @@ from database import db
 from render_api import render_api, RenderAPI
 from activity_tracker import activity_tracker
 from notifications import send_notification, send_startup_notification, send_daily_report
+from uptime_monitor import uptime_monitor
 
 import logging
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
@@ -78,10 +79,26 @@ def manage_mongo_lock():
 
 class RenderMonitorBot:
     def __init__(self):
-        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).post_init(self._post_init).build()
         self.db = db
         self.render_api = render_api
         self.setup_handlers()
+        
+    async def _post_init(self, app: Application):
+        commands = [
+            BotCommand("start", "התחלה"),
+            BotCommand("help", "עזרה"),
+            BotCommand("status", "מצב כל השירותים"),
+            BotCommand("manage", "ניהול שירותים"),
+            BotCommand("suspend", "השעיית כל השירותים"),
+            BotCommand("resume", "החזרת שירותים מושעים"),
+            BotCommand("list_suspended", "רשימת שירותים מושעים"),
+            BotCommand("alerts", "בחירת שירותים להתראות זמינות"),
+            BotCommand("mute", "השתקת התראות לזמן מוגבל"),
+            BotCommand("unmute", "ביטול השתקת התראות")
+        ]
+        await app.bot.set_my_commands(commands)
+        logging.info("Bot commands menu set")
         
     def setup_handlers(self):
         """הוספת command handlers"""
@@ -96,6 +113,12 @@ class RenderMonitorBot:
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
+        # התראות זמינות (בחירת שירותים לניטור עליות/ירידות)
+        self.app.add_handler(CommandHandler("alerts", self.alerts_command))
+        self.app.add_handler(CallbackQueryHandler(self.alerts_callback, pattern="^alerts_toggle_|^alerts_back$"))
+        # השתקת התראות בזמן דיפלוי
+        self.app.add_handler(CommandHandler("mute", self.mute_command))
+        self.app.add_handler(CommandHandler("unmute", self.unmute_command))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -113,6 +136,9 @@ class RenderMonitorBot:
         message += "/suspend - השעיית כל השירותים (עם אישור)\n"
         message += "/resume - החזרת כל השירותים המושעים\n"
         message += "/list_suspended - רשימת שירותים מושעים\n"
+        message += "/alerts - בחירת שירותים לקבלת התראות על ירידה/עלייה\n"
+        message += "/mute [משך] - השתקת התראות (למשל: /mute 30m או /mute 2h)\n"
+        message += "/unmute - ביטול השתקת התראות\n"
         message += "/help - עזרה\n"
         await update.message.reply_text(message, parse_mode="HTML")
     
@@ -325,6 +351,74 @@ class RenderMonitorBot:
         elif query.data == "cancel_suspend":
             await query.edit_message_text(text="הפעולה בוטלה.")
 
+    async def alerts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """תפריט לבחירת שירותים לקבלת התראות על ירידה/עלייה"""
+        services = self.db.get_all_services()
+        if not services:
+            await update.message.reply_text("לא נמצאו שירותים לניהול התראות.")
+            return
+        keyboard = []
+        for service in services:
+            service_id = service["_id"]
+            name = service.get("service_name", service_id)
+            enabled = bool(service.get("uptime_monitor"))
+            label = f"{'✅' if enabled else '⬜️'} {name}"
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"alerts_toggle_{service_id}")])
+        keyboard.append([InlineKeyboardButton("« חזור", callback_data="alerts_back")])
+        await update.message.reply_text("בחר שירותים להתראות זמינות:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    async def alerts_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data == "alerts_back":
+            await query.edit_message_text("סגור.")
+            return
+        # toggle
+        service_id = data.replace("alerts_toggle_", "")
+        service = self.db.get_service_activity(service_id)
+        current = bool(service.get("uptime_monitor")) if service else False
+        self.db.set_uptime_monitor(service_id, not current)
+        # רענון התצוגה
+        services = self.db.get_all_services()
+        keyboard = []
+        for s in services:
+            sid = s["_id"]
+            name = s.get("service_name", sid)
+            enabled = bool(s.get("uptime_monitor"))
+            label = f"{'✅' if enabled else '⬜️'} {name}"
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"alerts_toggle_{sid}")])
+        keyboard.append([InlineKeyboardButton("« חזור", callback_data="alerts_back")])
+        await query.edit_message_text("בחר שירותים להתראות זמינות:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    async def mute_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """השתקת התראות לזמן מוגבל (למשל בזמן דיפלוי)"""
+        # ברירת מחדל: 30 דקות
+        duration_minutes = 30
+        if context.args:
+            arg = context.args[0].lower().strip()
+            try:
+                if arg.endswith('h'):
+                    hours = int(arg[:-1])
+                    duration_minutes = max(1, hours * 60)
+                elif arg.endswith('m'):
+                    minutes = int(arg[:-1])
+                    duration_minutes = max(1, minutes)
+                else:
+                    # פירוש כמות בדקות אם אין סיומת
+                    duration_minutes = max(1, int(arg))
+            except ValueError:
+                await update.message.reply_text("פורמט לא תקין. השתמש בדוגמה: /mute 30m או /mute 2h")
+                return
+        until = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
+        self.db.set_notifications_mute_until(until)
+        await update.message.reply_text(f"התראות הושתקו עד: {until.strftime('%d/%m/%Y %H:%M UTC')}")
+
+    async def unmute_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """ביטול השתקת התראות"""
+        self.db.set_notifications_mute_until(None)
+        await update.message.reply_text("ההתראות אינן מושתקות יותר.")
+
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """לוכד את כל השגיאות ושולח אותן ללוג."""
@@ -344,6 +438,9 @@ def run_scheduler():
     
     # דוח יומי בשעה 20:00
     schedule.every().day.at("20:00").do(send_daily_report)
+    
+    # ניטור זמינות כל דקה
+    schedule.every(1).minutes().do(uptime_monitor.check_services)
     
     while True:
         schedule.run_pending()
@@ -366,6 +463,12 @@ def main():
     if not config.SERVICES_TO_MONITOR:
         print("❌ לא מוגדרים שירותים לניטור ב-config.py")
         return
+    
+    # seed ראשוני של שירותים ממערך הקונפיג במידה וחסר במסד הנתונים
+    existing_ids = {s["_id"] for s in db.get_all_services()}
+    for service_id in config.SERVICES_TO_MONITOR:
+        if service_id not in existing_ids:
+            db.update_service_activity(service_id)
     
     # יצירת בוט
     bot = RenderMonitorBot()
