@@ -5,13 +5,11 @@ import threading
 import os
 import sys
 import atexit
-import signal
-import socket
 
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import Conflict
 
@@ -20,7 +18,6 @@ from database import db
 from render_api import render_api, RenderAPI
 from activity_tracker import activity_tracker
 from notifications import send_notification, send_startup_notification, send_daily_report
-from uptime_monitor import uptime_monitor
 
 import logging
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
@@ -33,80 +30,45 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # --- מנגנון נעילה חדש מבוסס MongoDB ---
 
 LOCK_ID = "render_monitor_bot_lock" # מזהה ייחודי למנעול שלנו
-HOST_NAME = socket.gethostname()
 
 def cleanup_mongo_lock():
     """מנקה את נעילת ה-MongoDB ביציאה"""
     try:
-        deleted = db.db.locks.delete_one({"_id": LOCK_ID, "pid": os.getpid(), "host": HOST_NAME}).deleted_count
-        if deleted:
-            print("INFO: MongoDB lock released.")
+        db.db.locks.delete_one({"_id": LOCK_ID})
+        print("INFO: MongoDB lock released.")
     except Exception as e:
         print(f"ERROR: Could not release MongoDB lock on exit: {e}")
-
-def is_process_alive(pid: int) -> bool:
-    """בודק אם תהליך עם PID קיים וחי במערכת הלינוקס הנוכחית"""
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except Exception:
-        return False
-
-
-def handle_exit_signal(signum, frame):
-    cleanup_mongo_lock()
-    sys.exit(0)
 
 def manage_mongo_lock():
     """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה עם יציאה נקייה."""
     pid = os.getpid()
-    now = datetime.now(timezone.utc)
-
-    force_start = str(os.getenv("FORCE_START", "")).lower() in ("1", "true", "yes", "y")
-
+    now = datetime.now(timezone.utc) # 'now' הוא מודע לאזור זמן (aware)
+    
     lock = db.db.locks.find_one({"_id": LOCK_ID})
     if lock:
-        lock_time = lock.get("timestamp", now)
+        lock_time = lock.get("timestamp", now) # 'lock_time' מגיע מה-DB והוא תמים (naive)
+        
+        # --- התיקון נמצא כאן ---
+        # אם התאריך מה-DB הוא 'תמים', אנחנו הופכים אותו ל'מודע' עם אזור זמן UTC
         if lock_time.tzinfo is None:
             lock_time = lock_time.replace(tzinfo=timezone.utc)
-
-        lock_pid = lock.get("pid")
-        lock_host = lock.get("host")
-
-        if force_start:
-            print("WARNING: FORCE_START is set. Overriding existing MongoDB lock.")
+        
+        # עכשיו שני התאריכים מודעים וניתן לבצע חישוב
+        if (now - lock_time) > timedelta(hours=1):
+            print(f"WARNING: Found stale MongoDB lock from {lock_time}. Overwriting.")
             db.db.locks.delete_one({"_id": LOCK_ID})
         else:
-            if lock_host == HOST_NAME and isinstance(lock_pid, int):
-                if is_process_alive(lock_pid):
-                    print("INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
-                    sys.exit(0)
-                else:
-                    print(f"WARNING: Found stale MongoDB lock (dead PID {lock_pid} on host {HOST_NAME}). Overwriting.")
-                    db.db.locks.delete_one({"_id": LOCK_ID})
-            else:
-                if (now - lock_time) > timedelta(hours=1):
-                    print(f"WARNING: Found stale MongoDB lock from {lock_time}. Overwriting.")
-                    db.db.locks.delete_one({"_id": LOCK_ID})
-                else:
-                    print(f"INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
-                    sys.exit(0)
+            print(f"INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
+            sys.exit(0)
 
     try:
         db.db.locks.insert_one({
             "_id": LOCK_ID,
             "pid": pid,
-            "host": HOST_NAME,
             "timestamp": now
         })
         atexit.register(cleanup_mongo_lock)
-        signal.signal(signal.SIGINT, handle_exit_signal)
-        signal.signal(signal.SIGTERM, handle_exit_signal)
-        print(f"INFO: MongoDB lock acquired by process {pid} on host {HOST_NAME}.")
+        print(f"INFO: MongoDB lock acquired by process {pid}.")
     except DuplicateKeyError:
         print(f"INFO: Lock was acquired by another process just now. Exiting gracefully.")
         sys.exit(0)
@@ -116,26 +78,10 @@ def manage_mongo_lock():
 
 class RenderMonitorBot:
     def __init__(self):
-        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).post_init(self._post_init).build()
+        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
         self.db = db
         self.render_api = render_api
         self.setup_handlers()
-        
-    async def _post_init(self, app: Application):
-        commands = [
-            BotCommand("start", "התחלה"),
-            BotCommand("help", "עזרה"),
-            BotCommand("status", "מצב כל השירותים"),
-            BotCommand("manage", "ניהול שירותים"),
-            BotCommand("suspend", "השעיית כל השירותים"),
-            BotCommand("resume", "החזרת שירותים מושעים"),
-            BotCommand("list_suspended", "רשימת שירותים מושעים"),
-            BotCommand("alerts", "בחירת שירותים להתראות זמינות"),
-            BotCommand("mute", "השתקת התראות לזמן מוגבל"),
-            BotCommand("unmute", "ביטול השתקת התראות")
-        ]
-        await app.bot.set_my_commands(commands)
-        logging.info("Bot commands menu set")
         
     def setup_handlers(self):
         """הוספת command handlers"""
@@ -150,12 +96,6 @@ class RenderMonitorBot:
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
-        # התראות זמינות (בחירת שירותים לניטור עליות/ירידות)
-        self.app.add_handler(CommandHandler("alerts", self.alerts_command))
-        self.app.add_handler(CallbackQueryHandler(self.alerts_callback, pattern="^alerts_toggle_|^alerts_back$"))
-        # השתקת התראות בזמן דיפלוי
-        self.app.add_handler(CommandHandler("mute", self.mute_command))
-        self.app.add_handler(CommandHandler("unmute", self.unmute_command))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -173,9 +113,6 @@ class RenderMonitorBot:
         message += "/suspend - השעיית כל השירותים (עם אישור)\n"
         message += "/resume - החזרת כל השירותים המושעים\n"
         message += "/list_suspended - רשימת שירותים מושעים\n"
-        message += "/alerts - בחירת שירותים לקבלת התראות על ירידה/עלייה\n"
-        message += "/mute [משך] - השתקת התראות (למשל: /mute 30m או /mute 2h)\n"
-        message += "/unmute - ביטול השתקת התראות\n"
         message += "/help - עזרה\n"
         await update.message.reply_text(message, parse_mode="HTML")
     
@@ -207,11 +144,7 @@ class RenderMonitorBot:
             message += f"   סטטוס: {status}\n"
             
             if last_activity:
-                # נרמול לאזור זמן UTC כדי למנוע שגיאות naive/aware
-                now_utc = datetime.now(timezone.utc)
-                if last_activity.tzinfo is None:
-                    last_activity = last_activity.replace(tzinfo=timezone.utc)
-                days_inactive = (now_utc - last_activity).days
+                days_inactive = (datetime.now() - last_activity.replace(tzinfo=None)).days
                 message += f"   פעילות אחרונה: {days_inactive} ימים\n"
             else:
                 message += f"   פעילות אחרונה: לא ידוע\n"
@@ -246,7 +179,6 @@ class RenderMonitorBot:
             print(f"Attempting to suspend service with ID: {service_id}")
             self.render_api.suspend_service(service_id)
             self.db.update_service_activity(service_id, status="suspended")
-            self.db.update_last_known_status(service_id, "suspended")
             self.db.increment_suspend_count(service_id)
             await update.message.reply_text(f"✅ השירות {service_id} הושהה בהצלחה.")
             print(f"Successfully suspended service {service_id}.")
@@ -295,10 +227,7 @@ class RenderMonitorBot:
             
             message += f"• *{service_name}*\n"
             if suspended_at:
-                now_utc = datetime.now(timezone.utc)
-                if suspended_at.tzinfo is None:
-                    suspended_at = suspended_at.replace(tzinfo=timezone.utc)
-                days_suspended = (now_utc - suspended_at).days
+                days_suspended = (datetime.now() - suspended_at.replace(tzinfo=None)).days
                 message += f"  מושעה כבר {days_suspended} ימים\n"
             message += "\n"
         
@@ -358,7 +287,6 @@ class RenderMonitorBot:
             try:
                 self.render_api.suspend_service(service_id)
                 self.db.update_service_activity(service_id, status="suspended")
-                self.db.update_last_known_status(service_id, "suspended")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הושהה בהצלחה.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהשעיית {service_id}: {e}")
@@ -366,7 +294,6 @@ class RenderMonitorBot:
             try:
                 self.render_api.resume_service(service_id)
                 self.db.update_service_activity(service_id, status="active")
-                self.db.update_last_known_status(service_id, "active")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
@@ -388,7 +315,6 @@ class RenderMonitorBot:
                     try:
                         self.render_api.suspend_service(service['_id'])
                         self.db.update_service_activity(service['_id'], status="suspended")
-                        self.db.update_last_known_status(service['_id'], "suspended")
                         self.db.increment_suspend_count(service['_id'])
                         suspended_count += 1
                     except Exception as e:
@@ -398,74 +324,6 @@ class RenderMonitorBot:
 
         elif query.data == "cancel_suspend":
             await query.edit_message_text(text="הפעולה בוטלה.")
-
-    async def alerts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """תפריט לבחירת שירותים לקבלת התראות על ירידה/עלייה"""
-        services = self.db.get_all_services()
-        if not services:
-            await update.message.reply_text("לא נמצאו שירותים לניהול התראות.")
-            return
-        keyboard = []
-        for service in services:
-            service_id = service["_id"]
-            name = service.get("service_name", service_id)
-            enabled = bool(service.get("uptime_monitor"))
-            label = f"{'✅' if enabled else '⬜️'} {name}"
-            keyboard.append([InlineKeyboardButton(label, callback_data=f"alerts_toggle_{service_id}")])
-        keyboard.append([InlineKeyboardButton("« חזור", callback_data="alerts_back")])
-        await update.message.reply_text("בחר שירותים להתראות זמינות:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    async def alerts_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        data = query.data
-        if data == "alerts_back":
-            await query.edit_message_text("סגור.")
-            return
-        # toggle
-        service_id = data.replace("alerts_toggle_", "")
-        service = self.db.get_service_activity(service_id)
-        current = bool(service.get("uptime_monitor")) if service else False
-        self.db.set_uptime_monitor(service_id, not current)
-        # רענון התצוגה
-        services = self.db.get_all_services()
-        keyboard = []
-        for s in services:
-            sid = s["_id"]
-            name = s.get("service_name", sid)
-            enabled = bool(s.get("uptime_monitor"))
-            label = f"{'✅' if enabled else '⬜️'} {name}"
-            keyboard.append([InlineKeyboardButton(label, callback_data=f"alerts_toggle_{sid}")])
-        keyboard.append([InlineKeyboardButton("« חזור", callback_data="alerts_back")])
-        await query.edit_message_text("בחר שירותים להתראות זמינות:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    async def mute_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """השתקת התראות לזמן מוגבל (למשל בזמן דיפלוי)"""
-        # ברירת מחדל: 30 דקות
-        duration_minutes = 30
-        if context.args:
-            arg = context.args[0].lower().strip()
-            try:
-                if arg.endswith('h'):
-                    hours = int(arg[:-1])
-                    duration_minutes = max(1, hours * 60)
-                elif arg.endswith('m'):
-                    minutes = int(arg[:-1])
-                    duration_minutes = max(1, minutes)
-                else:
-                    # פירוש כמות בדקות אם אין סיומת
-                    duration_minutes = max(1, int(arg))
-            except ValueError:
-                await update.message.reply_text("פורמט לא תקין. השתמש בדוגמה: /mute 30m או /mute 2h")
-                return
-        until = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
-        self.db.set_notifications_mute_until(until)
-        await update.message.reply_text(f"התראות הושתקו עד: {until.strftime('%d/%m/%Y %H:%M UTC')}")
-
-    async def unmute_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ביטול השתקת התראות"""
-        self.db.set_notifications_mute_until(None)
-        await update.message.reply_text("ההתראות אינן מושתקות יותר.")
 
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -486,9 +344,6 @@ def run_scheduler():
     
     # דוח יומי בשעה 20:00
     schedule.every().day.at("20:00").do(send_daily_report)
-    
-    # ניטור זמינות כל דקה
-    schedule.every(1).minutes.do(uptime_monitor.check_services)
     
     while True:
         schedule.run_pending()
@@ -512,12 +367,6 @@ def main():
         print("❌ לא מוגדרים שירותים לניטור ב-config.py")
         return
     
-    # seed ראשוני של שירותים ממערך הקונפיג במידה וחסר במסד הנתונים
-    existing_ids = {s["_id"] for s in db.get_all_services()}
-    for service_id in config.SERVICES_TO_MONITOR:
-        if service_id not in existing_ids:
-            db.update_service_activity(service_id)
-    
     # יצירת בוט
     bot = RenderMonitorBot()
     bot.app.add_error_handler(error_handler)  # רישום מטפל השגיאות
@@ -539,10 +388,4 @@ def main():
     bot.app.run_polling()
 
 if __name__ == "__main__":
-    if "--unlock" in sys.argv:
-        deleted = db.db.locks.delete_one({"_id": LOCK_ID}).deleted_count
-        print(f"INFO: Manual unlock done. Deleted: {deleted}")
-        sys.exit(0)
-    if "--force" in sys.argv:
-        os.environ["FORCE_START"] = "true"
     main()

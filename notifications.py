@@ -1,25 +1,11 @@
 import requests
 import config
-from datetime import datetime, timezone
-
+from datetime import datetime
 
 def send_notification(message: str):
-    """שליחת התראה לאדמין דרך טלגרם (מכבד השתקת התראות זמנית)"""
-    # כיבוד mute גלובלי (למשל בזמן דיפלוי)
-    try:
-        from database import db
-        mute_until = db.get_notifications_mute_until()
-        if mute_until and isinstance(mute_until, datetime):
-            # וודא שהזמן מודע לאזור זמן
-            mute_until_aware = mute_until if mute_until.tzinfo else mute_until.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) < mute_until_aware:
-                print("🔕 התראות מושתקות כרגע עד:", mute_until_aware.isoformat())
-                return False
-    except Exception as e:
-        print(f"⚠️ שגיאה בבדיקת mute: {e}")
-    
+    """שליחת התראה לאדמין דרך טלגרם"""
     if not config.ADMIN_CHAT_ID or not config.TELEGRAM_BOT_TOKEN:
-        print("⚠️ לא מוגדר ADMIN_CHAT_ID או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה (הודעה תודפס ללוג)")
+        print("⚠️ לא מוגדר ADMIN_CHAT_ID או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה")
         print(f"הודעה: {message}")
         return False
     
@@ -33,7 +19,8 @@ def send_notification(message: str):
     
     payload = {
         "chat_id": config.ADMIN_CHAT_ID,
-        "text": formatted_message
+        "text": formatted_message,
+        "parse_mode": "Markdown"
     }
     
     try:
@@ -48,12 +35,10 @@ def send_notification(message: str):
         print(f"❌ שגיאה בשליחת התראה: {str(e)}")
         return False
 
-
 def send_startup_notification():
     """התראה על הפעלת הבוט"""
     message = "🚀 בוט ניטור Render הופעל בהצלחה"
     send_notification(message)
-
 
 def send_daily_report():
     """דוח יומי על מצב השירותים"""
@@ -75,10 +60,7 @@ def send_daily_report():
             name = service.get("service_name", service["_id"])
             suspended_at = service.get("suspended_at")
             if suspended_at:
-                now_utc = datetime.now(timezone.utc)
-                if suspended_at.tzinfo is None:
-                    suspended_at = suspended_at.replace(tzinfo=timezone.utc)
-                days_suspended = (now_utc - suspended_at).days
+                days_suspended = (datetime.now() - suspended_at).days
                 message += f"• {name} (מושעה {days_suspended} ימים)\n"
             else:
                 message += f"• {name}\n"
