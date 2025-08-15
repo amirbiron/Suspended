@@ -9,7 +9,7 @@ import atexit
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import Conflict
 
@@ -82,20 +82,40 @@ class RenderMonitorBot:
         self.db = db
         self.render_api = render_api
         self.setup_handlers()
+        self.app.post_init = self.post_init
         
     def setup_handlers(self):
         """הוספת command handlers"""
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("status", self.status_command))
+        self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(CommandHandler("suspend", self.suspend_command))
         self.app.add_handler(CommandHandler("resume", self.resume_command))
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("suspend_one", self.suspend_one_command))
-        self.app.add_handler(CommandHandler("manage", self.manage_command))
+        self.app.add_handler(CommandHandler("menu", self.main_menu_command))
+        # --- גיבויים ונקודות שמירה ---
+        # --- תפריט ראשי ---
+        # --- קיימים ---
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
+        self.app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^menu_"))
+        self.app.add_handler(CallbackQueryHandler(self.backup_callback, pattern="^menu_root$|^backup_|^backup_restore:|^backup_delete:"))
+    
+    async def post_init(self, app: Application):
+        commands = [
+            BotCommand("start", "התחלה"),
+            BotCommand("help", "עזרה"),
+            BotCommand("menu", "תפריט ראשי"),
+            BotCommand("status", "מצב השירותים"),
+            BotCommand("manage", "ניהול שירותים"),
+            BotCommand("suspend", "השעה את כל השירותים"),
+            BotCommand("resume", "החזר את כל השירותים"),
+            BotCommand("list_suspended", "רשימת שירותים מושעים"),
+        ]
+        await app.bot.set_my_commands(commands)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -103,11 +123,13 @@ class RenderMonitorBot:
         message += "הבוט מנטר את השירותים שלך ומשעה אותם אוטומטית במידת הצורך.\n\n"
         message += "הקש /help לרשימת פקודות"
         await update.message.reply_text(message)
+        await self.main_menu_command(update, context)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """רשימת פקודות מעודכנת"""
         message = "📋 <b>רשימת פקודות:</b>\n\n"
         message += "/start - התחלה\n"
+        message += "/menu - תפריט ראשי עם כפתורים\n"
         message += "/status - הצגת כל השירותים\n"
         message += "/manage - ניהול שירותים (השעיה/הפעלה עם כפתורים)\n"
         message += "/suspend - השעיית כל השירותים (עם אישור)\n"
@@ -115,6 +137,161 @@ class RenderMonitorBot:
         message += "/list_suspended - רשימת שירותים מושעים\n"
         message += "/help - עזרה\n"
         await update.message.reply_text(message, parse_mode="HTML")
+
+    # --- תפריט ראשי ---
+    async def main_menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        keyboard = [
+            [InlineKeyboardButton("⚙️ ניהול שירותים", callback_data="menu_manage")],
+            [InlineKeyboardButton("🛟 גיבוי/נ. שמירה", callback_data="menu_backup")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if update.message:
+            await update.message.reply_text("בחר אפשרות:", reply_markup=reply_markup)
+        else:
+            await update.callback_query.edit_message_text("בחר אפשרות:", reply_markup=reply_markup)
+
+    async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data == "menu_manage":
+            await self.manage_command(update, context)
+        elif data == "menu_backup":
+            await self.backup_menu_command(update, context)
+
+    # --- תפריט גיבוי/נ. שמירה ---
+    async def backup_menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        keyboard = [
+            [InlineKeyboardButton("📦 צור גיבוי עכשיו", callback_data="backup_create")],
+            [InlineKeyboardButton("🗂️ רשימת גיבויים", callback_data="backup_list")],
+            [InlineKeyboardButton("🔁 שחזר גיבוי אחרון", callback_data="backup_restore_latest")],
+            [InlineKeyboardButton("⬅️ חזרה לתפריט ראשי", callback_data="menu_root")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        # תומך גם בשיחה חדשה וגם בעריכה של הודעת כפתורים קיימת
+        if update.message:
+            await update.message.reply_text("בחר פעולה לניהול גיבויים ונקודות שמירה:", reply_markup=reply_markup)
+        else:
+            await update.callback_query.edit_message_text("בחר פעולה לניהול גיבויים ונקודות שמירה:", reply_markup=reply_markup)
+
+    async def backup_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        backups_dir = "/workspace/_backups"
+
+        if data == "menu_root":
+            await self.main_menu_command(update, context)
+            return
+
+        # יצירת גיבוי
+        if data == "backup_create":
+            await query.edit_message_text("יוצר גיבוי... זה עלול לקחת דקה")
+            proc = await asyncio.create_subprocess_shell(
+                "/workspace/scripts/backup.sh",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            out_text = (stdout or b"").decode(errors="ignore")
+            err_text = (stderr or b"").decode(errors="ignore")
+            created_path = None
+            for line in out_text.splitlines()[::-1]:
+                if "Backup created at:" in line:
+                    created_path = line.split("Backup created at:")[-1].strip()
+                    break
+            msg = "✅ גיבוי נוצר בהצלחה.\n"
+            if created_path:
+                msg += f"מיקום: {created_path}"
+            else:
+                msg += "(לא זוהה נתיב, ראה פלט)"
+            if err_text.strip():
+                msg += f"\nהערות: {err_text.strip()}"
+            await query.edit_message_text(msg)
+            return
+        
+        # רשימת גיבויים
+        if data == "backup_list":
+            if not os.path.isdir(backups_dir):
+                await query.edit_message_text("לא נמצאה תיקיית גיבויים.")
+                return
+            items = sorted(os.listdir(backups_dir))
+            if not items:
+                await query.edit_message_text("אין גיבויים שמורים.")
+                return
+            # מציגים עד 10 אחרונים
+            items = items[-10:][::-1]
+            keyboard = []
+            text_lines = ["🗂️ גיבויים זמינים:"]
+            for ts in items:
+                path = os.path.join(backups_dir, ts)
+                text_lines.append(f"• {ts}")
+                keyboard.append([
+                    InlineKeyboardButton("🔁 שחזר", callback_data=f"backup_restore:{ts}"),
+                    InlineKeyboardButton("🗑️ מחק", callback_data=f"backup_delete:{ts}")
+                ])
+            keyboard.append([InlineKeyboardButton("⬅️ חזרה", callback_data="backup_back")])
+            await query.edit_message_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        
+        # שחזור אחרון
+        if data == "backup_restore_latest":
+            if not os.path.isdir(backups_dir):
+                await query.edit_message_text("לא נמצאו גיבויים.")
+                return
+            items = sorted(os.listdir(backups_dir))
+            if not items:
+                await query.edit_message_text("לא נמצאו גיבויים.")
+                return
+            latest = items[-1]
+            await query.edit_message_text(f"משחזר את הגיבוי האחרון: {latest}... זה עלול לקחת זמן")
+            cmd = f"/workspace/scripts/restore.sh {os.path.join(backups_dir, latest)}"
+            proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await proc.communicate()
+            err_text = (stderr or b"").decode(errors="ignore").strip()
+            msg = f"✅ שוחזר בהצלחה מהגיבוי: {latest}"
+            if err_text:
+                msg += f"\nהערות: {err_text}"
+            await query.edit_message_text(msg)
+            return
+        
+        # חזרה לתפריט גיבוי
+        if data == "backup_back":
+            await self.backup_menu_command(update, context)
+            return
+        
+        # שחזור לפי timestamp
+        if data.startswith("backup_restore:"):
+            ts = data.split(":", 1)[1]
+            target = os.path.join(backups_dir, ts)
+            if not os.path.isdir(target):
+                await query.edit_message_text("הגיבוי המבוקש לא קיים.")
+                return
+            await query.edit_message_text(f"משחזר גיבוי {ts}... זה עלול לקחת זמן")
+            cmd = f"/workspace/scripts/restore.sh {target}"
+            proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await proc.communicate()
+            err_text = (stderr or b"").decode(errors="ignore").strip()
+            msg = f"✅ שוחזר בהצלחה מהגיבוי: {ts}"
+            if err_text:
+                msg += f"\nהערות: {err_text}"
+            await query.edit_message_text(msg)
+            return
+        
+        # מחיקת גיבוי
+        if data.startswith("backup_delete:"):
+            import shutil
+            ts = data.split(":", 1)[1]
+            target = os.path.join(backups_dir, ts)
+            if not os.path.isdir(target):
+                await query.edit_message_text("הגיבוי המבוקש לא קיים.")
+                return
+            try:
+                shutil.rmtree(target)
+                await query.edit_message_text(f"🗑️ הגיבוי {ts} נמחק.")
+            except Exception as e:
+                await query.edit_message_text(f"❌ כשלון במחיקה: {e}")
+            return
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הצגת מצב כל השירותים"""
@@ -134,17 +311,16 @@ class RenderMonitorBot:
             status = service.get("status", "unknown")
             last_activity = service.get("last_user_activity")
             
-            if status == "suspended":
-                status_emoji = "🔴"
-            else:
-                status_emoji = "🟢"
+            status_emoji = "🔴" if status == "suspended" else "🟢"
             
             message += f"{status_emoji} *{service_name}*\n"
             message += f"   ID: `{service_id}`\n"
             message += f"   סטטוס: {status}\n"
             
-            if last_activity:
-                days_inactive = (datetime.now() - last_activity.replace(tzinfo=None)).days
+            if isinstance(last_activity, datetime):
+                if last_activity.tzinfo is None:
+                    last_activity = last_activity.replace(tzinfo=timezone.utc)
+                days_inactive = (datetime.now(timezone.utc) - last_activity).days
                 message += f"   פעילות אחרונה: {days_inactive} ימים\n"
             else:
                 message += f"   פעילות אחרונה: לא ידוע\n"
@@ -155,18 +331,38 @@ class RenderMonitorBot:
     
     async def suspend_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """שולח בקשת אישור להשעיית כל השירותים"""
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ כן, השעה הכל", callback_data="confirm_suspend_all"),
-                InlineKeyboardButton("❌ בטל", callback_data="cancel_suspend"),
-            ]
-        ]
+        keyboard = [[InlineKeyboardButton("✅ כן, השעה הכל", callback_data="confirm_suspend_all"), InlineKeyboardButton("❌ בטל", callback_data="cancel_suspend")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            "⚠️ האם אתה בטוח שברצונך להשהות את <b>כל</b> השירותים?",
-            reply_markup=reply_markup,
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("⚠️ האם אתה בטוח שברצונך להשהות את <b>כל</b> השירותים?", reply_markup=reply_markup, parse_mode="HTML")
+
+    async def suspend_button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מטפל בלחצני האישור/ביטול להשעיית כל השירותים"""
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        
+        if data == "cancel_suspend":
+            await query.edit_message_text("בוטל.")
+            return
+        
+        if data == "confirm_suspend_all":
+            services = self.db.get_all_services()
+            if not services:
+                await query.edit_message_text("אין שירותים להשעות.")
+                return
+            
+            messages = []
+            for service in services:
+                service_id = service["_id"]
+                service_name = service.get("service_name", service_id)
+                result = activity_tracker.manual_suspend_service(service_id)
+                if result.get("success"):
+                    messages.append(f"✅ {service_name} - הושעה")
+                else:
+                    messages.append(f"❌ {service_name} - כשלון: {result.get('message')}")
+            
+            await query.edit_message_text("תוצאות השעיה:\n\n" + "\n".join(messages))
+            return
     
     async def suspend_one_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """השעיית שירות ספציפי לפי ID"""
@@ -180,23 +376,20 @@ class RenderMonitorBot:
             self.render_api.suspend_service(service_id)
             self.db.update_service_activity(service_id, status="suspended")
             self.db.increment_suspend_count(service_id)
-            await update.message.reply_text(f"✅ השירות {service_id} הושהה בהצלחה.")
-            print(f"Successfully suspended service {service_id}.")
+            await update.message.reply_text(f"✅ השירות עם ID {service_id} הושעה בהצלחה")
         except Exception as e:
-            await update.message.reply_text(f"❌ כישלון בהשעיית השירות {service_id}.\nשגיאה: {e}")
-            print(f"Failed to suspend service {service_id}. Error: {e}")
+            await update.message.reply_text(f"❌ לא ניתן להשעות את השירות: {str(e)}")
     
     async def resume_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """החזרת כל השירותים המושעים"""
+        """החזרת כל השירותים המושעים לפעילות"""
         suspended_services = db.get_suspended_services()
         
         if not suspended_services:
-            await update.message.reply_text("אין שירותים מושעים")
+            await update.message.reply_text("אין שירותים מושעים כרגע")
             return
         
-        await update.message.reply_text("מתחיל החזרת שירותים לפעילות...")
-        
         messages = []
+        
         for service in suspended_services:
             service_id = service["_id"]
             service_name = service.get("service_name", service_id)
@@ -226,18 +419,23 @@ class RenderMonitorBot:
             suspended_at = service.get("suspended_at")
             
             message += f"• *{service_name}*\n"
-            if suspended_at:
-                days_suspended = (datetime.now() - suspended_at.replace(tzinfo=None)).days
+            if isinstance(suspended_at, datetime):
+                if suspended_at.tzinfo is None:
+                    suspended_at = suspended_at.replace(tzinfo=timezone.utc)
+                days_suspended = (datetime.now(timezone.utc) - suspended_at).days
                 message += f"  מושעה כבר {days_suspended} ימים\n"
             message += "\n"
         
         await update.message.reply_text(message, parse_mode="Markdown")
-
+    
     async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מציג תפריט ניהול עם כפתורים לכל שירות"""
         services = self.db.get_all_services()
         if not services:
-            await update.message.reply_text("לא נמצאו שירותים לניהול.")
+            if update.message:
+                await update.message.reply_text("לא נמצאו שירותים לניהול.")
+            else:
+                await update.callback_query.edit_message_text("לא נמצאו שירותים לניהול.")
             return
 
         keyboard = []
@@ -248,7 +446,10 @@ class RenderMonitorBot:
             keyboard.append([InlineKeyboardButton(service_name, callback_data=callback_data)])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("בחר שירות לניהול:", reply_markup=reply_markup)
+        if update.message:
+            await update.message.reply_text("בחר שירות לניהול:", reply_markup=reply_markup)
+        else:
+            await update.callback_query.edit_message_text("בחר שירות לניהול:", reply_markup=reply_markup)
 
     async def manage_service_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מציג אפשרויות ניהול לשירות שנבחר"""
@@ -258,84 +459,62 @@ class RenderMonitorBot:
         # מחלצים את ה-ID מה-callback_data
         service_id = query.data.split('_')[1]
         service = self.db.get_service_activity(service_id)
-        service_name = service.get("service_name", service_id) if service else service_id
-        status = service.get("status", "unknown") if service else "unknown"
+        
+        service_name = service.get("service_name", service_id)
+        status = service.get("status", "unknown")
+        suspended = status == "suspended"
+        
+        # יצירת כפתורים בהתאם לסטטוס
+        keyboard = []
+        if suspended:
+            keyboard.append([InlineKeyboardButton("הפעל שירות", callback_data=f"resume_{service_id}")])
+        else:
+            keyboard.append([InlineKeyboardButton("השעיה ידנית", callback_data=f"suspend_{service_id}")])
+        keyboard.append([InlineKeyboardButton("חזור", callback_data="back_to_manage")])
 
-        # כפתורים להשעיה או הפעלה מחדש
-        keyboard = [
-            [
-                InlineKeyboardButton("🔴 השהה", callback_data=f"suspend_{service_id}"),
-                InlineKeyboardButton("🟢 הפעל מחדש", callback_data=f"resume_{service_id}")
-            ],
-            [InlineKeyboardButton("« חזור לרשימה", callback_data="back_to_manage")]
-        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            text=f"ניהול שירות: <b>{service_name}</b>\nסטטוס נוכחי: {status}",
-            reply_markup=reply_markup,
-            parse_mode="HTML"
-        )
+        
+        message = f"ניהול שירות: {service_name}\n"
+        message += f"סטטוס נוכחי: {'מושעה' if suspended else 'פעיל'}\n"
+        await query.edit_message_text(text=message, reply_markup=reply_markup)
 
     async def service_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """מבצע פעולת השעיה או הפעלה על שירות"""
+        """מטפל בכפתורים של השעיה/הפעלה"""
         query = update.callback_query
         await query.answer()
 
-        action, service_id = query.data.split('_')[0], '_'.join(query.data.split('_')[1:])
-
+        data = query.data
+        action, service_id = data.split('_', 1)
+        
         if action == "suspend":
-            try:
-                self.render_api.suspend_service(service_id)
-                self.db.update_service_activity(service_id, status="suspended")
-                await query.edit_message_text(text=f"✅ השירות {service_id} הושהה בהצלחה.")
-            except Exception as e:
-                await query.edit_message_text(text=f"❌ כישלון בהשעיית {service_id}: {e}")
+            result = activity_tracker.manual_suspend_service(service_id)
+            if result["success"]:
+                await query.edit_message_text(text="השירות הושעה בהצלחה!")
+            else:
+                await query.edit_message_text(text=f"כשלון בהשעיה: {result['message']}")
         elif action == "resume":
-            try:
-                self.render_api.resume_service(service_id)
-                self.db.update_service_activity(service_id, status="active")
-                await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
-            except Exception as e:
-                await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
+            result = activity_tracker.manual_resume_service(service_id)
+            if result["success"]:
+                await query.edit_message_text(text="השירות הופעל בהצלחה!")
+            else:
+                await query.edit_message_text(text=f"כשלון בהפעלה: {result['message']}")
         elif action == "back":  # מטפל בכפתור "חזור"
             # קורא מחדש לפונקציה המקורית כדי להציג את הרשימה
             await self.manage_command(update.callback_query, context)
 
-    async def suspend_button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """מטפל בלחיצה על כפתורי האישור להשעיה"""
-        query = update.callback_query
-        await query.answer()
+    # ✨ פונקציה שמטפלת בשגיאות
+    @staticmethod
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        """לוכד את כל השגיאות ושולח אותן ללוג."""
+        logger = logging.getLogger(__name__)
+        if isinstance(context.error, Conflict):
+            # מתמודד עם שגיאת הקונפליקט הנפוצה בשקט יחסי
+            logger.warning("⚠️ Conflict error detected, likely another bot instance is running. Ignoring.")
+            return  # יוצאים מהפונקציה כדי לא להדפיס את כל השגיאה הארוכה
+        
+        # עבור כל שגיאה אחרת, מדפיסים את המידע המלא
+        logging.error("❌ Exception while handling an update:", exc_info=context.error)
 
-        if query.data == "confirm_suspend_all":
-            await query.edit_message_text(text="מאשר... מתחיל בתהליך השעיה כללי.")
-            services = self.db.get_all_services()
-            suspended_count = 0
-            for service in services:
-                if service.get("status") != "suspended":
-                    try:
-                        self.render_api.suspend_service(service['_id'])
-                        self.db.update_service_activity(service['_id'], status="suspended")
-                        self.db.increment_suspend_count(service['_id'])
-                        suspended_count += 1
-                    except Exception as e:
-                        print(f"Could not suspend service {service['_id']}: {e}")
-            
-            await query.edit_message_text(text=f"✅ הושלם. {suspended_count} שירותים הושהו.")
-
-        elif query.data == "cancel_suspend":
-            await query.edit_message_text(text="הפעולה בוטלה.")
-
-# ✨ פונקציה שמטפלת בשגיאות
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """לוכד את כל השגיאות ושולח אותן ללוג."""
-    logger = logging.getLogger(__name__)
-    if isinstance(context.error, Conflict):
-        # מתמודד עם שגיאת הקונפליקט הנפוצה בשקט יחסי
-        logger.warning("⚠️ Conflict error detected, likely another bot instance is running. Ignoring.")
-        return  # יוצאים מהפונקציה כדי לא להדפיס את כל השגיאה הארוכה
-    
-    # עבור כל שגיאה אחרת, מדפיסים את המידע המלא
-    logging.error("❌ Exception while handling an update:", exc_info=context.error)
 
 def run_scheduler():
     """הרצת המתזמן ברקע"""
@@ -348,6 +527,7 @@ def run_scheduler():
     while True:
         schedule.run_pending()
         time.sleep(60)  # בדיקה כל דקה
+
 
 def main():
     """פונקציה ראשית"""
@@ -369,7 +549,7 @@ def main():
     
     # יצירת בוט
     bot = RenderMonitorBot()
-    bot.app.add_error_handler(error_handler)  # רישום מטפל השגיאות
+    bot.app.add_error_handler(RenderMonitorBot.error_handler)  # רישום מטפל השגיאות
     
     # הפעלת המתזמן ברקע
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
