@@ -5,6 +5,8 @@ import threading
 import os
 import sys
 import atexit
+import signal
+import socket
 
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
@@ -31,45 +33,80 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # --- מנגנון נעילה חדש מבוסס MongoDB ---
 
 LOCK_ID = "render_monitor_bot_lock" # מזהה ייחודי למנעול שלנו
+HOST_NAME = socket.gethostname()
 
 def cleanup_mongo_lock():
     """מנקה את נעילת ה-MongoDB ביציאה"""
     try:
-        db.db.locks.delete_one({"_id": LOCK_ID})
-        print("INFO: MongoDB lock released.")
+        deleted = db.db.locks.delete_one({"_id": LOCK_ID, "pid": os.getpid(), "host": HOST_NAME}).deleted_count
+        if deleted:
+            print("INFO: MongoDB lock released.")
     except Exception as e:
         print(f"ERROR: Could not release MongoDB lock on exit: {e}")
+
+def is_process_alive(pid: int) -> bool:
+    """בודק אם תהליך עם PID קיים וחי במערכת הלינוקס הנוכחית"""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def handle_exit_signal(signum, frame):
+    cleanup_mongo_lock()
+    sys.exit(0)
 
 def manage_mongo_lock():
     """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה עם יציאה נקייה."""
     pid = os.getpid()
-    now = datetime.now(timezone.utc) # 'now' הוא מודע לאזור זמן (aware)
-    
+    now = datetime.now(timezone.utc)
+
+    force_start = str(os.getenv("FORCE_START", "")).lower() in ("1", "true", "yes", "y")
+
     lock = db.db.locks.find_one({"_id": LOCK_ID})
     if lock:
-        lock_time = lock.get("timestamp", now) # 'lock_time' מגיע מה-DB והוא תמים (naive)
-        
-        # --- התיקון נמצא כאן ---
-        # אם התאריך מה-DB הוא 'תמים', אנחנו הופכים אותו ל'מודע' עם אזור זמן UTC
+        lock_time = lock.get("timestamp", now)
         if lock_time.tzinfo is None:
             lock_time = lock_time.replace(tzinfo=timezone.utc)
-        
-        # עכשיו שני התאריכים מודעים וניתן לבצע חישוב
-        if (now - lock_time) > timedelta(hours=1):
-            print(f"WARNING: Found stale MongoDB lock from {lock_time}. Overwriting.")
+
+        lock_pid = lock.get("pid")
+        lock_host = lock.get("host")
+
+        if force_start:
+            print("WARNING: FORCE_START is set. Overriding existing MongoDB lock.")
             db.db.locks.delete_one({"_id": LOCK_ID})
         else:
-            print(f"INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
-            sys.exit(0)
+            if lock_host == HOST_NAME and isinstance(lock_pid, int):
+                if is_process_alive(lock_pid):
+                    print("INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
+                    sys.exit(0)
+                else:
+                    print(f"WARNING: Found stale MongoDB lock (dead PID {lock_pid} on host {HOST_NAME}). Overwriting.")
+                    db.db.locks.delete_one({"_id": LOCK_ID})
+            else:
+                if (now - lock_time) > timedelta(hours=1):
+                    print(f"WARNING: Found stale MongoDB lock from {lock_time}. Overwriting.")
+                    db.db.locks.delete_one({"_id": LOCK_ID})
+                else:
+                    print(f"INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
+                    sys.exit(0)
 
     try:
         db.db.locks.insert_one({
             "_id": LOCK_ID,
             "pid": pid,
+            "host": HOST_NAME,
             "timestamp": now
         })
         atexit.register(cleanup_mongo_lock)
-        print(f"INFO: MongoDB lock acquired by process {pid}.")
+        signal.signal(signal.SIGINT, handle_exit_signal)
+        signal.signal(signal.SIGTERM, handle_exit_signal)
+        print(f"INFO: MongoDB lock acquired by process {pid} on host {HOST_NAME}.")
     except DuplicateKeyError:
         print(f"INFO: Lock was acquired by another process just now. Exiting gracefully.")
         sys.exit(0)
@@ -502,4 +539,10 @@ def main():
     bot.app.run_polling()
 
 if __name__ == "__main__":
+    if "--unlock" in sys.argv:
+        deleted = db.db.locks.delete_one({"_id": LOCK_ID}).deleted_count
+        print(f"INFO: Manual unlock done. Deleted: {deleted}")
+        sys.exit(0)
+    if "--force" in sys.argv:
+        os.environ["FORCE_START"] = "true"
     main()
