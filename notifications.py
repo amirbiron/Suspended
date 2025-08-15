@@ -1,6 +1,6 @@
 import requests
 import config
-from datetime import datetime, timezone
+from datetime import datetime
 
 def send_notification(message: str):
     """שליחת התראה לאדמין דרך טלגרם"""
@@ -12,7 +12,7 @@ def send_notification(message: str):
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
     
     # הוספת חותמת זמן
-    timestamp = datetime.now(timezone.utc).astimezone().strftime("%d/%m/%Y %H:%M")
+    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
     formatted_message = f"🤖 *Render Monitor Bot*\n"
     formatted_message += f"⏰ {timestamp}\n\n"
     formatted_message += message
@@ -60,10 +60,7 @@ def send_daily_report():
             name = service.get("service_name", service["_id"])
             suspended_at = service.get("suspended_at")
             if suspended_at:
-                # ודא ששני התאריכים מודעים לאזור זמן במידת הצורך
-                if suspended_at.tzinfo is None:
-                    suspended_at = suspended_at.replace(tzinfo=timezone.utc)
-                days_suspended = (datetime.now(timezone.utc) - suspended_at).days
+                days_suspended = (datetime.now() - suspended_at).days
                 message += f"• {name} (מושעה {days_suspended} ימים)\n"
             else:
                 message += f"• {name}\n"
