@@ -144,7 +144,9 @@ class RenderMonitorBot:
             message += f"   סטטוס: {status}\n"
             
             if last_activity:
-                days_inactive = (datetime.now() - last_activity.replace(tzinfo=None)).days
+                if last_activity.tzinfo is None:
+                    last_activity = last_activity.replace(tzinfo=timezone.utc)
+                days_inactive = (datetime.now(timezone.utc) - last_activity).days
                 message += f"   פעילות אחרונה: {days_inactive} ימים\n"
             else:
                 message += f"   פעילות אחרונה: לא ידוע\n"
@@ -227,7 +229,9 @@ class RenderMonitorBot:
             
             message += f"• *{service_name}*\n"
             if suspended_at:
-                days_suspended = (datetime.now() - suspended_at.replace(tzinfo=None)).days
+                if suspended_at.tzinfo is None:
+                    suspended_at = suspended_at.replace(tzinfo=timezone.utc)
+                days_suspended = (datetime.now(timezone.utc) - suspended_at).days
                 message += f"  מושעה כבר {days_suspended} ימים\n"
             message += "\n"
         
