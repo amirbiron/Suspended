@@ -38,7 +38,10 @@ class ActivityTracker:
         # בדיקה אם כבר נשלחה התראה היום
         last_alert = service.get("notification_settings", {}).get("last_alert_sent")
         if last_alert:
-            time_since_alert = datetime.now(timezone.utc) - last_alert
+            now_utc = datetime.now(timezone.utc)
+            if last_alert.tzinfo is None:
+                last_alert = last_alert.replace(tzinfo=timezone.utc)
+            time_since_alert = now_utc - last_alert
             if time_since_alert.days < 1:
                 return  # כבר נשלחה התראה היום
         
