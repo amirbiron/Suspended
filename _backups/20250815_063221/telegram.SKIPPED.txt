@@ -1,1 +1,0 @@
-Skipping Telegram commands export (missing TELEGRAM_BOT_TOKEN).

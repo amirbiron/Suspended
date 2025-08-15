@@ -4,7 +4,7 @@ import config
 
 class Database:
     def __init__(self):
-        self.client = MongoClient(config.MONGODB_URI, tz_aware=True, tzinfo=timezone.utc)
+        self.client = MongoClient(config.MONGODB_URI)
         self.db = self.client[config.DATABASE_NAME]
         self.services = self.db.service_activity
         self.user_interactions = self.db.user_interactions
