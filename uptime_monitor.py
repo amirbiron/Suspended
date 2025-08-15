@@ -8,8 +8,8 @@ from notifications import send_notification
 
 class UptimeMonitor:
     def __init__(self):
-        self.down_statuses = {"suspended", "failed", "degraded", "inactive"}
-        self.up_statuses = {"active", "live", "ok", "running"}
+        self.down_statuses = {"suspended", "failed", "degraded", "inactive", "error", "crashed", "stopped", "deploy_failed"}
+        self.up_statuses = {"active", "live", "ok", "running", "ready", "healthy", "deployed", "deploy_succeeded", "succeeded"}
 
     def _normalize_status(self, status: Optional[str]) -> Optional[str]:
         if status is None:
@@ -37,7 +37,9 @@ class UptimeMonitor:
     def check_services(self):
         monitored = db.get_monitored_services()
         if not monitored:
+            print("ℹ️ אין שירותים מסומנים להתראות זמינות (uptime_monitor=True). השתמש בפקודה /alerts לבחירה.")
             return
+        print(f"⏱️ Uptime monitor: בודק {len(monitored)} שירותים...")
         for service in monitored:
             service_id = service["_id"]
             try:
@@ -45,8 +47,12 @@ class UptimeMonitor:
                 current_status = self._normalize_status(current_status)
             except Exception as e:
                 # אם לא הצלחנו לקבל סטטוס, נשלח התראה רק אם זה שינוי מ"ידוע"
+                print(f"⚠️ כשל בקבלת סטטוס עבור {service_id}: {e}")
                 current_status = None
             previous_status = self._normalize_status(service.get("last_known_status"))
+
+            # לוג דיבוג לעקיבת מעבר סטטוסים
+            print(f"🔎 {service_id}: {previous_status} -> {current_status}")
 
             # אם אין סטטוס ידוע קודם, נשמור ונמשיך בלי התראה (למידה ראשונית)
             if previous_status is None:
