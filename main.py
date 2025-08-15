@@ -9,7 +9,7 @@ import atexit
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import Conflict
 
@@ -82,6 +82,7 @@ class RenderMonitorBot:
         self.db = db
         self.render_api = render_api
         self.setup_handlers()
+        self.app.post_init = self.post_init
         
     def setup_handlers(self):
         """הוספת command handlers"""
@@ -93,12 +94,28 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("suspend_one", self.suspend_one_command))
+        self.app.add_handler(CommandHandler("menu", self.main_menu_command))
         # --- גיבויים ונקודות שמירה ---
         # --- תפריט ראשי ---
         # --- קיימים ---
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
+        self.app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^menu_"))
+        self.app.add_handler(CallbackQueryHandler(self.backup_callback, pattern="^menu_root$|^backup_|^backup_restore:|^backup_delete:"))
+    
+    async def post_init(self, app: Application):
+        commands = [
+            BotCommand("start", "התחלה"),
+            BotCommand("help", "עזרה"),
+            BotCommand("menu", "תפריט ראשי"),
+            BotCommand("status", "מצב השירותים"),
+            BotCommand("manage", "ניהול שירותים"),
+            BotCommand("suspend", "השעה את כל השירותים"),
+            BotCommand("resume", "החזר את כל השירותים"),
+            BotCommand("list_suspended", "רשימת שירותים מושעים"),
+        ]
+        await app.bot.set_my_commands(commands)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -106,11 +123,13 @@ class RenderMonitorBot:
         message += "הבוט מנטר את השירותים שלך ומשעה אותם אוטומטית במידת הצורך.\n\n"
         message += "הקש /help לרשימת פקודות"
         await update.message.reply_text(message)
+        await self.main_menu_command(update, context)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """רשימת פקודות מעודכנת"""
         message = "📋 <b>רשימת פקודות:</b>\n\n"
         message += "/start - התחלה\n"
+        message += "/menu - תפריט ראשי עם כפתורים\n"
         message += "/status - הצגת כל השירותים\n"
         message += "/manage - ניהול שירותים (השעיה/הפעלה עם כפתורים)\n"
         message += "/suspend - השעיית כל השירותים (עם אישור)\n"
@@ -125,7 +144,11 @@ class RenderMonitorBot:
             [InlineKeyboardButton("⚙️ ניהול שירותים", callback_data="menu_manage")],
             [InlineKeyboardButton("🛟 גיבוי/נ. שמירה", callback_data="menu_backup")]
         ]
-        await update.message.reply_text("בחר אפשרות:", reply_markup=InlineKeyboardMarkup(keyboard))
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if update.message:
+            await update.message.reply_text("בחר אפשרות:", reply_markup=reply_markup)
+        else:
+            await update.callback_query.edit_message_text("בחר אפשרות:", reply_markup=reply_markup)
 
     async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
