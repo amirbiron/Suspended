@@ -170,7 +170,11 @@ class RenderMonitorBot:
             message += f"   סטטוס: {status}\n"
             
             if last_activity:
-                days_inactive = (datetime.now() - last_activity.replace(tzinfo=None)).days
+                # נרמול לאזור זמן UTC כדי למנוע שגיאות naive/aware
+                now_utc = datetime.now(timezone.utc)
+                if last_activity.tzinfo is None:
+                    last_activity = last_activity.replace(tzinfo=timezone.utc)
+                days_inactive = (now_utc - last_activity).days
                 message += f"   פעילות אחרונה: {days_inactive} ימים\n"
             else:
                 message += f"   פעילות אחרונה: לא ידוע\n"
@@ -253,7 +257,10 @@ class RenderMonitorBot:
             
             message += f"• *{service_name}*\n"
             if suspended_at:
-                days_suspended = (datetime.now() - suspended_at.replace(tzinfo=None)).days
+                now_utc = datetime.now(timezone.utc)
+                if suspended_at.tzinfo is None:
+                    suspended_at = suspended_at.replace(tzinfo=timezone.utc)
+                days_suspended = (now_utc - suspended_at).days
                 message += f"  מושעה כבר {days_suspended} ימים\n"
             message += "\n"
         
@@ -440,7 +447,7 @@ def run_scheduler():
     schedule.every().day.at("20:00").do(send_daily_report)
     
     # ניטור זמינות כל דקה
-    schedule.every(1).minutes().do(uptime_monitor.check_services)
+    schedule.every(1).minutes.do(uptime_monitor.check_services)
     
     while True:
         schedule.run_pending()
