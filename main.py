@@ -93,6 +93,10 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("suspend_one", self.suspend_one_command))
+        # --- גיבויים ונקודות שמירה ---
+        self.app.add_handler(CommandHandler("backup", self.backup_menu_command))
+        self.app.add_handler(CallbackQueryHandler(self.backup_callback, pattern="^backup_"))
+        # --- קיימים ---
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
@@ -113,8 +117,134 @@ class RenderMonitorBot:
         message += "/suspend - השעיית כל השירותים (עם אישור)\n"
         message += "/resume - החזרת כל השירותים המושעים\n"
         message += "/list_suspended - רשימת שירותים מושעים\n"
+        message += "/backup - גיבוי/נ. שמירה\n"
         message += "/help - עזרה\n"
         await update.message.reply_text(message, parse_mode="HTML")
+    
+    # --- תפריט גיבוי/נ. שמירה ---
+    async def backup_menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        keyboard = [
+            [InlineKeyboardButton("📦 צור גיבוי עכשיו", callback_data="backup_create")],
+            [InlineKeyboardButton("🗂️ רשימת גיבויים", callback_data="backup_list")],
+            [InlineKeyboardButton("🔁 שחזר גיבוי אחרון", callback_data="backup_restore_latest")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("בחר פעולה לניהול גיבויים ונקודות שמירה:", reply_markup=reply_markup)
+
+    async def backup_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        backups_dir = "/workspace/_backups"
+
+        # יצירת גיבוי
+        if data == "backup_create":
+            await query.edit_message_text("יוצר גיבוי... זה עלול לקחת דקה")
+            proc = await asyncio.create_subprocess_shell(
+                "/workspace/scripts/backup.sh",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            out_text = (stdout or b"").decode(errors="ignore")
+            err_text = (stderr or b"").decode(errors="ignore")
+            created_path = None
+            for line in out_text.splitlines()[::-1]:
+                if "Backup created at:" in line:
+                    created_path = line.split("Backup created at:")[-1].strip()
+                    break
+            msg = "✅ גיבוי נוצר בהצלחה.\n"
+            if created_path:
+                msg += f"מיקום: {created_path}"
+            else:
+                msg += "(לא זוהה נתיב, ראה פלט)"
+            if err_text.strip():
+                msg += f"\nהערות: {err_text.strip()}"
+            await query.edit_message_text(msg)
+            return
+        
+        # רשימת גיבויים
+        if data == "backup_list":
+            if not os.path.isdir(backups_dir):
+                await query.edit_message_text("לא נמצאה תיקיית גיבויים.")
+                return
+            items = sorted(os.listdir(backups_dir))
+            if not items:
+                await query.edit_message_text("אין גיבויים שמורים.")
+                return
+            # מציגים עד 10 אחרונים
+            items = items[-10:][::-1]
+            keyboard = []
+            text_lines = ["🗂️ גיבויים זמינים:"]
+            for ts in items:
+                path = os.path.join(backups_dir, ts)
+                text_lines.append(f"• {ts}")
+                keyboard.append([
+                    InlineKeyboardButton("🔁 שחזר", callback_data=f"backup_restore:{ts}"),
+                    InlineKeyboardButton("🗑️ מחק", callback_data=f"backup_delete:{ts}")
+                ])
+            keyboard.append([InlineKeyboardButton("⬅️ חזרה", callback_data="backup_back")])
+            await query.edit_message_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        
+        # שחזור אחרון
+        if data == "backup_restore_latest":
+            if not os.path.isdir(backups_dir):
+                await query.edit_message_text("לא נמצאו גיבויים.")
+                return
+            items = sorted(os.listdir(backups_dir))
+            if not items:
+                await query.edit_message_text("לא נמצאו גיבויים.")
+                return
+            latest = items[-1]
+            await query.edit_message_text(f"משחזר את הגיבוי האחרון: {latest}... זה עלול לקחת זמן")
+            cmd = f"/workspace/scripts/restore.sh {os.path.join(backups_dir, latest)}"
+            proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await proc.communicate()
+            err_text = (stderr or b"").decode(errors="ignore").strip()
+            msg = f"✅ שוחזר בהצלחה מהגיבוי: {latest}"
+            if err_text:
+                msg += f"\nהערות: {err_text}"
+            await query.edit_message_text(msg)
+            return
+        
+        # חזרה לתפריט גיבוי
+        if data == "backup_back":
+            await self.backup_menu_command(update, context)
+            return
+        
+        # שחזור לפי timestamp
+        if data.startswith("backup_restore:"):
+            ts = data.split(":", 1)[1]
+            target = os.path.join(backups_dir, ts)
+            if not os.path.isdir(target):
+                await query.edit_message_text("הגיבוי המבוקש לא קיים.")
+                return
+            await query.edit_message_text(f"משחזר גיבוי {ts}... זה עלול לקחת זמן")
+            cmd = f"/workspace/scripts/restore.sh {target}"
+            proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await proc.communicate()
+            err_text = (stderr or b"").decode(errors="ignore").strip()
+            msg = f"✅ שוחזר בהצלחה מהגיבוי: {ts}"
+            if err_text:
+                msg += f"\nהערות: {err_text}"
+            await query.edit_message_text(msg)
+            return
+        
+        # מחיקת גיבוי
+        if data.startswith("backup_delete:"):
+            import shutil
+            ts = data.split(":", 1)[1]
+            target = os.path.join(backups_dir, ts)
+            if not os.path.isdir(target):
+                await query.edit_message_text("הגיבוי המבוקש לא קיים.")
+                return
+            try:
+                shutil.rmtree(target)
+                await query.edit_message_text(f"🗑️ הגיבוי {ts} נמחק.")
+            except Exception as e:
+                await query.edit_message_text(f"❌ כשלון במחיקה: {e}")
+            return
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הצגת מצב כל השירותים"""
