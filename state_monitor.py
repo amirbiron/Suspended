@@ -13,6 +13,7 @@ class StateMonitor:
         self.transient_statuses = set(config.RENDER_TRANSIENT_STATUSES)
         self.suppress_after_our_action_minutes = config.ALERT_SUPPRESSION_MINUTES_AFTER_OUR_ACTION
         self.deploy_suppression_minutes = config.DEPLOY_SUPPRESSION_MINUTES
+        self.state_alert_cooldown_minutes = config.STATE_ALERT_COOLDOWN_MINUTES
 
     def _is_down(self, status: Optional[str]) -> bool:
         if not status:
@@ -33,12 +34,29 @@ class StateMonitor:
         return (datetime.now(timezone.utc) - last_action_at) <= timedelta(minutes=self.suppress_after_our_action_minutes)
 
     def _should_suppress_due_to_deploy(self, service_doc: dict) -> bool:
+        # חלון שהתקבל ע"י זיהוי transient
         last_transient = service_doc.get("last_transient_status_at")
-        if not last_transient:
+        if last_transient:
+            if last_transient.tzinfo is None:
+                last_transient = last_transient.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - last_transient) <= timedelta(minutes=self.deploy_suppression_minutes):
+                return True
+        # חלון יזום ע"י CI
+        deploy_until = service_doc.get("deploy_window_until")
+        if deploy_until:
+            if deploy_until.tzinfo is None:
+                deploy_until = deploy_until.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) <= deploy_until:
+                return True
+        return False
+
+    def _is_in_cooldown(self, service_doc: dict) -> bool:
+        last_alert_at = service_doc.get("last_state_alert_at")
+        if not last_alert_at:
             return False
-        if last_transient.tzinfo is None:
-            last_transient = last_transient.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - last_transient) <= timedelta(minutes=self.deploy_suppression_minutes)
+        if last_alert_at.tzinfo is None:
+            last_alert_at = last_alert_at.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last_alert_at) < timedelta(minutes=self.state_alert_cooldown_minutes)
 
     def _maybe_notify(self, service_id: str, service_name: str, old_status: Optional[str], new_status: Optional[str], service_doc: dict):
         was_down = self._is_down(old_status)
@@ -60,11 +78,15 @@ class StateMonitor:
         if self._should_suppress_due_to_our_action(service_doc) or self._should_suppress_due_to_deploy(service_doc):
             return
 
+        if self._is_in_cooldown(service_doc):
+            return
+
         if is_down:
             message = format_down_alert(service_name, service_id, new_status or "unknown")
         else:
             message = format_up_alert(service_name, service_id, new_status or "unknown")
-        send_notification(message)
+        if send_notification(message):
+            db.set_last_state_alert(service_id)
 
     def check_services_state(self):
         """פולינג סטטוסי שירותים ב-Render ושליחת התראות על שינויי UP/DOWN"""

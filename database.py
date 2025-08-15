@@ -152,5 +152,35 @@ class Database:
             upsert=True
         )
 
+    def set_last_state_alert(self, service_id):
+        """עדכון מתי נשלחה התראת סטטוס אחרונה לשירות (נדרש ל-cooldown)"""
+        self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"last_state_alert_at": datetime.now(timezone.utc)}},
+            upsert=True
+        )
+
+    def start_deploy_window(self, service_ids, minutes: int):
+        """סימון חלון דיפלוי עבור שירותים – מדכא התראות עד הזמן שנקבע"""
+        until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+        if isinstance(service_ids, str):
+            service_ids = [service_ids]
+        self.services.update_many(
+            {"_id": {"$in": service_ids}},
+            {"$set": {
+                "last_transient_status_at": datetime.now(timezone.utc),
+                "deploy_window_until": until
+            }}
+        )
+
+    def end_deploy_window(self, service_ids):
+        """סיום חלון דיפלוי לפני הזמן – מסיר הדגל לשירותים"""
+        if isinstance(service_ids, str):
+            service_ids = [service_ids]
+        self.services.update_many(
+            {"_id": {"$in": service_ids}},
+            {"$unset": {"deploy_window_until": ""}}
+        )
+
 # יצירת instance גלובלי
 db = Database()

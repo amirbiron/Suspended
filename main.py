@@ -19,6 +19,7 @@ from render_api import render_api, RenderAPI
 from activity_tracker import activity_tracker
 from notifications import send_notification, send_startup_notification, send_daily_report
 from state_monitor import state_monitor
+from ci_hooks_server import run_server_background
 
 import logging
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
@@ -97,6 +98,8 @@ class RenderMonitorBot:
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
+        self.app.add_handler(CommandHandler("deploy_start", self.deploy_start_command))
+        self.app.add_handler(CommandHandler("deploy_end", self.deploy_end_command))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -114,6 +117,8 @@ class RenderMonitorBot:
         message += "/suspend - השעיית כל השירותים (עם אישור)\n"
         message += "/resume - החזרת כל השירותים המושעים\n"
         message += "/list_suspended - רשימת שירותים מושעים\n"
+        message += "/deploy_start <minutes> [service_id1 service_id2 ...] - התחלת חלון דיפלוי\n"
+        message += "/deploy_end [service_id1 service_id2 ...] - סיום חלון דיפלוי\n"
         message += "/help - עזרה\n"
         await update.message.reply_text(message, parse_mode="HTML")
     
@@ -334,6 +339,26 @@ class RenderMonitorBot:
         elif query.data == "cancel_suspend":
             await query.edit_message_text(text="הפעולה בוטלה.")
 
+    async def deploy_start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """התחלת חלון דיפלוי ידני (לשימוש מ-CI או ידנית)"""
+        if not context.args:
+            await update.message.reply_text("שימוש: /deploy_start <minutes> [service_id1 service_id2 ...]")
+            return
+        try:
+            minutes = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("הדקות חייבות להיות מספר.")
+            return
+        service_ids = context.args[1:] if len(context.args) > 1 else [s for s in config.SERVICES_TO_MONITOR]
+        db.start_deploy_window(service_ids, minutes)
+        await update.message.reply_text(f"✅ חלון דיפלוי הופעל ל-{len(service_ids)} שירותים למשך {minutes} דק'.")
+
+    async def deploy_end_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """סיום חלון דיפלוי ידני (לשימוש מ-CI או ידנית)"""
+        service_ids = context.args if context.args else [s for s in config.SERVICES_TO_MONITOR]
+        db.end_deploy_window(service_ids)
+        await update.message.reply_text(f"✅ חלון דיפלוי הסתיים עבור {len(service_ids)} שירותים.")
+
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """לוכד את כל השגיאות ושולח אותן ללוג."""
@@ -387,6 +412,9 @@ def main():
     # הפעלת המתזמן ברקע
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
+
+    # הפעלת שרת Webhook ל-CI (אופציונלי)
+    run_server_background()
     
     # שליחת התראת הפעלה
     send_startup_notification()

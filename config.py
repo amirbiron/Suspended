@@ -37,11 +37,12 @@ TIMEZONE = "Asia/Jerusalem"
 
 # --- ניטור סטטוס שירותים (UP/DOWN) ---
 ENABLE_STATE_MONITOR = os.getenv("ENABLE_STATE_MONITOR", "false").lower() in ("1", "true", "yes")
-STATUS_POLL_INTERVAL_MINUTES = int(os.getenv("STATUS_POLL_INTERVAL_MINUTES", "1"))
+STATUS_POLL_INTERVAL_MINUTES = int(os.getenv("STATUS_POLL_INTERVAL_MINUTES", "5"))
 
 # חלונות השתקה כדי לא לשלוח התראות שנגרמות מפעולה שלנו / דיפלוי
 ALERT_SUPPRESSION_MINUTES_AFTER_OUR_ACTION = int(os.getenv("ALERT_SUPPRESSION_MINUTES_AFTER_OUR_ACTION", "10"))
 DEPLOY_SUPPRESSION_MINUTES = int(os.getenv("DEPLOY_SUPPRESSION_MINUTES", "10"))
+STATE_ALERT_COOLDOWN_MINUTES = int(os.getenv("STATE_ALERT_COOLDOWN_MINUTES", "5"))
 
 # מצבי ביניים של Render (במהלך בניה/דיפלוי) שבהם לא נשלחות התראות
 RENDER_TRANSIENT_STATUSES = [
@@ -55,3 +56,8 @@ RENDER_DOWN_STATUSES = [
     "failed",
     "crashed",
 ]
+
+# --- Webhooks ל-CI לציון חלון דיפלוי ---
+ENABLE_CI_HTTP_HOOKS = os.getenv("ENABLE_CI_HTTP_HOOKS", "false").lower() in ("1", "true", "yes")
+CI_HTTP_PORT = int(os.getenv("CI_HTTP_PORT", "8088"))
+CI_SHARED_SECRET = os.getenv("CI_SHARED_SECRET", "")
