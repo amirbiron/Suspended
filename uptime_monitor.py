@@ -48,10 +48,13 @@ class UptimeMonitor:
                 current_status = None
             previous_status = self._normalize_status(service.get("last_known_status"))
 
+            print(f"[uptime] service={service_id} prev={previous_status} curr={current_status}")
+
             # אם אין סטטוס ידוע קודם, נשמור ונמשיך בלי התראה (למידה ראשונית)
             if previous_status is None:
                 if current_status is not None:
                     db.update_last_known_status(service_id, current_status)
+                    print(f"[uptime] baseline learned for {service_id}: {current_status}")
                 continue
 
             # שינוי סטטוס? נתריע ונעדכן
@@ -59,6 +62,7 @@ class UptimeMonitor:
                 message = self._compose_transition_message(service, previous_status, current_status)
                 send_notification(message)
                 db.update_last_known_status(service_id, current_status)
+                print(f"[uptime] transition detected for {service_id}: {previous_status} -> {current_status} (notification sent)")
             elif current_status is not None and previous_status is None:
                 db.update_last_known_status(service_id, current_status)
 

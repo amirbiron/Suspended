@@ -63,7 +63,12 @@ class RenderAPI:
         """קבלת סטטוס שירות"""
         service_info = self.get_service_info(service_id)
         if service_info:
-            return service_info.get("status", "unknown")
+            # Render services לרוב כוללים שדה 'suspended' בוליאני, ולא תמיד 'status'
+            if "status" in service_info and service_info["status"]:
+                return service_info["status"]
+            if "suspended" in service_info:
+                return "suspended" if service_info.get("suspended") else "active"
+            return "unknown"
         return None
     
     def list_services(self) -> list:
