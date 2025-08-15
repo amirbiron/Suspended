@@ -38,21 +38,14 @@ class ActivityTracker:
         # בדיקה אם כבר נשלחה התראה היום
         last_alert = service.get("notification_settings", {}).get("last_alert_sent")
         if last_alert:
-            now_utc = datetime.now(timezone.utc)
-            if last_alert.tzinfo is None:
-                last_alert = last_alert.replace(tzinfo=timezone.utc)
-            time_since_alert = now_utc - last_alert
+            time_since_alert = datetime.now(timezone.utc) - last_alert
             if time_since_alert.days < 1:
                 return  # כבר נשלחה התראה היום
         
         # חישוב ימי חוסר פעילות
         last_activity = service.get("last_user_activity")
         if last_activity:
-            # ודא ששני התאריכים ברי-השוואה (שניהם timezone-aware ב-UTC)
-            now_utc = datetime.now(timezone.utc)
-            if last_activity.tzinfo is None:
-                last_activity = last_activity.replace(tzinfo=timezone.utc)
-            inactive_days = (now_utc - last_activity).days
+            inactive_days = (datetime.now(timezone.utc) - last_activity).days
         else:
             inactive_days = "לא ידוע"
         
@@ -113,7 +106,6 @@ class ActivityTracker:
         if result["success"]:
             # עדכון במסד הנתונים
             db.update_service_activity(service_id, status="suspended")
-            db.update_last_known_status(service_id, "suspended")
             db.increment_suspend_count(service_id)
             print(f"שירות {service_name} הושעה ידנית בהצלחה")
         else:
@@ -135,7 +127,6 @@ class ActivityTracker:
         if result["success"]:
             # עדכון במסד הנתונים
             db.update_service_activity(service_id, status="active")
-            db.update_last_known_status(service_id, "active")
             
             # שליחת התראה על החזרה מוצלחת
             message = f"✅ החזרה לפעילות מוצלחת\n"

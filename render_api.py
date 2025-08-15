@@ -60,61 +60,10 @@ class RenderAPI:
             return None
     
     def get_service_status(self, service_id: str) -> Optional[str]:
-        """קבלת סטטוס שירות בצורה סבילה יותר
-        נסיון לזהות סטטוס ממספר שדות ונקודות קצה:
-        - אם השירות מושעה: החזרת "suspended"
-        - אם יש שדה status/state בשירות – החזר אותו
-        - נסיון להביא את הסטטוס של ה-Deploy האחרון
-        - נסיון להביא סטטוס מאינסטנס ראשון
-        """
+        """קבלת סטטוס שירות"""
         service_info = self.get_service_info(service_id)
-        if not service_info:
-            return None
-
-        # 1) Suspended flag at service level
-        try:
-            suspended_flag = service_info.get("suspended")
-            if isinstance(suspended_flag, bool) and suspended_flag:
-                return "suspended"
-        except Exception:
-            pass
-
-        # 2) Direct status-like fields on the service object
-        for key in ("status", "state", "serviceStatus"):
-            value = service_info.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-        # 3) Latest deploy status
-        try:
-            url = f"{self.base_url}/services/{service_id}/deploys?limit=1"
-            response = requests.get(url, headers=self.headers)
-            if response.status_code == 200:
-                deploys = response.json()
-                if isinstance(deploys, list) and deploys:
-                    latest = deploys[0] or {}
-                    for key in ("status", "state"):
-                        v = latest.get(key)
-                        if isinstance(v, str) and v.strip():
-                            return v.strip()
-        except requests.RequestException:
-            pass
-
-        # 4) Instances status as a last resort
-        try:
-            url = f"{self.base_url}/services/{service_id}/instances"
-            response = requests.get(url, headers=self.headers)
-            if response.status_code == 200:
-                instances = response.json()
-                if isinstance(instances, list) and instances:
-                    instance = instances[0] or {}
-                    for key in ("status", "state", "health"):
-                        v = instance.get(key)
-                        if isinstance(v, str) and v.strip():
-                            return v.strip()
-        except requests.RequestException:
-            pass
-
+        if service_info:
+            return service_info.get("status", "unknown")
         return None
     
     def list_services(self) -> list:
