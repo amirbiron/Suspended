@@ -9,13 +9,6 @@ class ActivityTracker:
         self.inactive_days_alert = config.INACTIVE_DAYS_ALERT
         self.auto_suspend_days = config.AUTO_SUSPEND_DAYS
         
-    def _ensure_aware_utc(self, value):
-        if isinstance(value, datetime):
-            if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
-            return value.astimezone(timezone.utc)
-        return value
-        
     def record_bot_usage(self, service_id: str, user_id: int, service_name: str = None):
         """רישום שימוש בבוט"""
         db.record_user_interaction(service_id, user_id)
@@ -44,16 +37,14 @@ class ActivityTracker:
         
         # בדיקה אם כבר נשלחה התראה היום
         last_alert = service.get("notification_settings", {}).get("last_alert_sent")
-        if isinstance(last_alert, datetime):
-            last_alert = self._ensure_aware_utc(last_alert)
+        if last_alert:
             time_since_alert = datetime.now(timezone.utc) - last_alert
             if time_since_alert.days < 1:
                 return  # כבר נשלחה התראה היום
         
         # חישוב ימי חוסר פעילות
         last_activity = service.get("last_user_activity")
-        if isinstance(last_activity, datetime):
-            last_activity = self._ensure_aware_utc(last_activity)
+        if last_activity:
             inactive_days = (datetime.now(timezone.utc) - last_activity).days
         else:
             inactive_days = "לא ידוע"
