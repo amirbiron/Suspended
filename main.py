@@ -115,7 +115,7 @@ class RenderMonitorBot:
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
         # התראות זמינות (בחירת שירותים לניטור עליות/ירידות)
         self.app.add_handler(CommandHandler("alerts", self.alerts_command))
-        self.app.add_handler(CallbackQueryHandler(self.alerts_callback, pattern="^alerts_toggle_|^alerts_back$"))
+        self.app.add_handler(CallbackQueryHandler(self.alerts_callback, pattern="^alerts_toggle_|^alerts_back$|^alerts_done$"))
         # השתקת התראות בזמן דיפלוי
         self.app.add_handler(CommandHandler("mute", self.mute_command))
         self.app.add_handler(CommandHandler("unmute", self.unmute_command))
@@ -375,13 +375,19 @@ class RenderMonitorBot:
             enabled = bool(service.get("uptime_monitor"))
             label = f"{'✅' if enabled else '⬜️'} {name}"
             keyboard.append([InlineKeyboardButton(label, callback_data=f"alerts_toggle_{service_id}")])
-        keyboard.append([InlineKeyboardButton("« חזור", callback_data="alerts_back")])
+        keyboard.append([
+            InlineKeyboardButton("✅ אישור", callback_data="alerts_done"),
+            InlineKeyboardButton("« חזור", callback_data="alerts_back")
+        ])
         await update.message.reply_text("בחר שירותים להתראות זמינות:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     async def alerts_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         data = query.data
+        if data == "alerts_done":
+            await query.edit_message_text("הבחירות נשמרו.")
+            return
         if data == "alerts_back":
             await query.edit_message_text("סגור.")
             return
@@ -399,7 +405,10 @@ class RenderMonitorBot:
             enabled = bool(s.get("uptime_monitor"))
             label = f"{'✅' if enabled else '⬜️'} {name}"
             keyboard.append([InlineKeyboardButton(label, callback_data=f"alerts_toggle_{sid}")])
-        keyboard.append([InlineKeyboardButton("« חזור", callback_data="alerts_back")])
+        keyboard.append([
+            InlineKeyboardButton("✅ אישור", callback_data="alerts_done"),
+            InlineKeyboardButton("« חזור", callback_data="alerts_back")
+        ])
         await query.edit_message_text("בחר שירותים להתראות זמינות:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     async def mute_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
