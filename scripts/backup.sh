@@ -23,25 +23,31 @@ fi
 
 # 2) Archive project code (excluding heavy/irrelevant dirs)
 TAR_EXCLUDES=(
-	"--exclude=.git"
-	"--exclude=node_modules"
-	"--exclude=venv"
-	"--exclude=__pycache__"
-	"--exclude=_backups"
+	--exclude=.git
+	--exclude=node_modules
+	--exclude=venv
+	--exclude=__pycache__
+	--exclude=_backups
 )
 
-tar -czf "${DEST_DIR}/project.tar.gz" -C "${PROJECT_DIR}" . "${TAR_EXCLUDES[@]}"
+tar -czf "${DEST_DIR}/project.tar.gz" -C "${PROJECT_DIR}" "${TAR_EXCLUDES[@]}" .
 
 # 3) Copy .env if exists
 if [ -f "${ENV_FILE}" ]; then
 	cp "${ENV_FILE}" "${DEST_DIR}/env.backup"
 fi
 
-# 4) MongoDB dump if URI provided and mongodump installed
-if [ -n "${MONGO_URI}" ] && command -v mongodump >/dev/null 2>&1; then
-	mongodump --uri="${MONGO_URI}" --archive="${DEST_DIR}/mongo.archive" --gzip || true
+# 4) MongoDB dump
+if [ -n "${MONGO_URI}" ]; then
+	if command -v mongodump >/dev/null 2>&1; then
+		mongodump --uri="${MONGO_URI}" --archive="${DEST_DIR}/mongo.archive" --gzip || true
+		echo "mongo_mode=archive" > "${DEST_DIR}/mongo.mode"
+	else
+		python3 "${PROJECT_DIR}/scripts/mongo_backup.py" "${DEST_DIR}/mongo_json" || true
+		echo "mongo_mode=json" > "${DEST_DIR}/mongo.mode"
+	fi
 else
-	echo "Skipping Mongo dump (missing MONGODB_URI or mongodump)." > "${DEST_DIR}/mongo.SKIPPED.txt"
+	echo "Skipping Mongo dump (missing MONGODB_URI)." > "${DEST_DIR}/mongo.SKIPPED.txt"
 fi
 
 # 5) Telegram commands export (default scope)
@@ -60,7 +66,7 @@ Backup created at ${TS}
 - Git hash: $(cat "${DEST_DIR}/git_hash.txt")
 - Project tar: project.tar.gz
 - .env: env.backup (if existed)
-- Mongo: mongo.archive (gzip) if available
+- Mongo: if mongo.mode=archive -> mongo.archive (gzip); if mongo.mode=json -> mongo_json/*.jsonl
 - Telegram commands: telegram_commands_*.json if token provided
 
 To restore, see restore.sh

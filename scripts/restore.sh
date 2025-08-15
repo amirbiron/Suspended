@@ -31,12 +31,26 @@ if [ -f "${BACKUP_PATH}/env.backup" ]; then
 	echo "Restored .env to ${ENV_FILE}"
 fi
 
-# 3) Restore MongoDB
-if [ -n "${MONGO_URI}" ] && command -v mongorestore >/dev/null 2>&1 && [ -f "${BACKUP_PATH}/mongo.archive" ]; then
-	mongorestore --uri="${MONGO_URI}" --archive="${BACKUP_PATH}/mongo.archive" --gzip || true
-	echo "Restored MongoDB from archive"
+# 3) Restore MongoDB (archive or JSON fallback)
+if [ -n "${MONGO_URI}" ]; then
+	MODE_FILE="${BACKUP_PATH}/mongo.mode"
+	MODE=""
+	[ -f "${MODE_FILE}" ] && MODE=$(cut -d'=' -f2 "${MODE_FILE}")
+	if [ "${MODE}" = "archive" ] && [ -f "${BACKUP_PATH}/mongo.archive" ]; then
+		if command -v mongorestore >/dev/null 2>&1; then
+			mongorestore --uri="${MONGO_URI}" --archive="${BACKUP_PATH}/mongo.archive" --gzip || true
+			echo "Restored MongoDB from archive"
+		else
+			echo "mongorestore not found; cannot restore archive."
+		fi
+	elif [ "${MODE}" = "json" ] && [ -d "${BACKUP_PATH}/mongo_json" ]; then
+		python3 "${PROJECT_DIR}/scripts/mongo_restore.py" "${BACKUP_PATH}/mongo_json" || true
+		echo "Restored MongoDB from JSON backup"
+	else
+		echo "Skipping Mongo restore (no recognizable backup or missing tools)."
+	fi
 else
-	echo "Skipping Mongo restore (missing MONGODB_URI/mongorestore or archive missing)."
+	echo "Skipping Mongo restore (missing MONGODB_URI)."
 fi
 
 # 4) Restore Telegram commands (default scope only by default)
@@ -48,7 +62,6 @@ if [ -n "${TELEGRAM_TOKEN}" ]; then
 			-d "{\"commands\": ${CMDS}, \"scope\": {\"type\": \"default\"}}" >/dev/null || true
 		echo "Restored Telegram default commands"
 	fi
-	# Optional: restore other scopes if needed
 	for scope in private groups admins; do
 		FILE="${BACKUP_PATH}/telegram_commands_${scope}.json"
 		[ -f "$FILE" ] || continue
