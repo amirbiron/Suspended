@@ -1176,19 +1176,29 @@ class RenderMonitorBot:
     async def _simulate_status_change(self, service_id: str, old_status: str, new_status: str):
         """סימולציה של שינוי סטטוס"""
         logger = logging.getLogger(__name__)
-        logger.info(f"Simulating status change for {service_id}: {old_status} -> {new_status}")
+        logger.info(f"=== START _simulate_status_change ===")
+        logger.info(f"Service ID: {service_id}")
+        logger.info(f"Old Status: {old_status}")
+        logger.info(f"New Status: {new_status}")
         
         # עדכון הסטטוס במסד הנתונים
+        logger.info(f"Updating database status to: {new_status}")
         self.db.update_service_status(service_id, new_status)
         self.db.record_status_change(service_id, old_status, new_status)
         
         # קבלת מידע על השירות
         service = self.db.get_service_activity(service_id)
         service_name = service.get("service_name", service_id)
+        logger.info(f"Service name: {service_name}")
+        
+        # בדיקה אם השינוי משמעותי
+        logger.info(f"Checking if change is significant: {old_status} -> {new_status}")
+        is_significant = status_monitor._is_significant_change(old_status, new_status)
+        logger.info(f"Is significant: {is_significant}")
         
         # שליחת התראה אם השינוי משמעותי
-        if status_monitor._is_significant_change(old_status, new_status):
-            logger.info(f"Significant change detected for {service_id}, sending notification")
+        if is_significant:
+            logger.info(f"Change IS significant, preparing notification")
             
             # יצירת אימוג'י מתאים
             if new_status == "online":
@@ -1216,15 +1226,26 @@ class RenderMonitorBot:
                 test_message += "✅ השירות חזר לפעילות תקינה"
             elif new_status == "offline":
                 test_message += "⚠️ השירות ירד ואינו זמין"
-                
+            
+            logger.info(f"Sending notification with message length: {len(test_message)}")
+            logger.info(f"ADMIN_CHAT_ID configured: {config.ADMIN_CHAT_ID}")
+            
             # שליחת ההתראה עם בדיקת תוצאה
-            result = send_notification(test_message)
-            if result:
-                logger.info(f"Test notification sent successfully for {service_id}")
-            else:
-                logger.error(f"Failed to send test notification for {service_id}")
+            try:
+                result = send_notification(test_message)
+                logger.info(f"Notification send result: {result}")
+                if result:
+                    logger.info(f"✅ Test notification sent successfully for {service_id}")
+                else:
+                    logger.error(f"❌ Failed to send test notification for {service_id}")
+                    logger.error(f"Check ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN configuration")
+            except Exception as e:
+                logger.error(f"❌ Exception while sending notification: {str(e)}")
+                logger.error(f"Exception type: {type(e).__name__}")
         else:
-            logger.info(f"Change from {old_status} to {new_status} is not significant, no notification sent")
+            logger.info(f"Change is NOT significant, no notification will be sent")
+        
+        logger.info(f"=== END _simulate_status_change ===\n")
 
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
