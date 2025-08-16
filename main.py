@@ -79,14 +79,14 @@ def manage_mongo_lock():
 
 class RenderMonitorBot:
     def __init__(self):
-        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).post_init(self.setup_bot_commands).build()
         self.db = db
         self.render_api = render_api
         self.setup_handlers()
-        self.setup_bot_commands()  # Add bot commands setup
+        # הפקודות יוגדרו ב-post_init
         
-    def setup_bot_commands(self):
-        """הגדרת תפריט הפקודות בטלגרם"""
+    async def setup_bot_commands(self, app: Application):
+        """הגדרת תפריט הפקודות בטלגרם (מורץ לאחר אתחול האפליקציה)"""
         from telegram import BotCommand
         
         commands = [
@@ -104,8 +104,8 @@ class RenderMonitorBot:
             BotCommand("help", "❓ עזרה ומידע")
         ]
         
-        # הגדרת הפקודות בבוט
-        asyncio.create_task(self.app.bot.set_my_commands(commands))
+        # הגדרת הפקודות בבוט לאחר שהלולאה פעילה
+        await app.bot.set_my_commands(commands)
         
     def setup_handlers(self):
         """הוספת command handlers"""
