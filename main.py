@@ -136,6 +136,7 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("list_monitored", self.list_monitored_command))
         self.app.add_handler(CommandHandler("status_history", self.status_history_command))
         self.app.add_handler(CommandHandler("monitor_manage", self.monitor_manage_command)) # New handler
+        self.app.add_handler(CommandHandler("test_monitor", self.test_monitor_command))  # Test command
         
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
@@ -921,6 +922,27 @@ class RenderMonitorBot:
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+
+    async def test_monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """פקודת ניטור בדיקה"""
+        if not context.args:
+            await update.message.reply_text("❌ חסר service ID\nשימוש: /test_monitor [service_id]")
+            return
+        
+        service_id = context.args[0]
+        user_id = update.effective_user.id
+        
+        # הפעלת הניטור
+        if status_monitor.enable_monitoring(service_id, user_id):
+            await update.message.reply_text(
+                f"✅ ניטור סטטוס הופעל עבור השירות {service_id}\n"
+                f"תקבל התראות כשהשירות יעלה או ירד."
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ לא הצלחתי להפעיל ניטור עבור {service_id}\n"
+                f"ודא שה-ID נכון ושהשירות קיים ב-Render."
+            )
 
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
