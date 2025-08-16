@@ -32,5 +32,9 @@ INACTIVE_DAYS_ALERT = 3  # התראה אחרי כמה ימים של חוסר פ�
 AUTO_SUSPEND_DAYS = 7    # השעיה אוטומטית אחרי כמה ימים
 CHECK_INTERVAL_HOURS = 24  # בדיקה כל כמה שעות
 
+# הגדרות ניטור סטטוס
+STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("STATUS_CHECK_INTERVAL_SECONDS", "60"))  # בדיקת סטטוס כל 60 שניות
+STATUS_MONITORING_ENABLED = os.getenv("STATUS_MONITORING_ENABLED", "true").lower() == "true"  # האם ניטור סטטוס מופעל כברירת מחדל
+
 # הגדרות כלליות
 TIMEZONE = "Asia/Jerusalem"

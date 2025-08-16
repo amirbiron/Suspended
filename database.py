@@ -8,6 +8,8 @@ class Database:
         self.db = self.client[config.DATABASE_NAME]
         self.services = self.db.service_activity
         self.user_interactions = self.db.user_interactions
+        self.status_changes = self.db.status_changes  # New collection for status history
+        self.manual_actions = self.db.manual_actions  # New collection for manual actions
         
     def get_service_activity(self, service_id):
         """קבלת נתוני פעילות של שירות"""
@@ -103,6 +105,109 @@ class Database:
             {"_id": service_id},
             {"$inc": {"suspend_count": 1}}
         )
+    
+    # ===== New methods for status monitoring =====
+    
+    def enable_status_monitoring(self, service_id: str, user_id: int, service_name: str = None, current_status: str = None):
+        """הפעלת ניטור סטטוס לשירות"""
+        update_data = {
+            "status_monitoring.enabled": True,
+            "status_monitoring.enabled_by": user_id,
+            "status_monitoring.enabled_at": datetime.now(timezone.utc)
+        }
+        
+        if service_name:
+            update_data["service_name"] = service_name
+            
+        if current_status:
+            update_data["last_known_status"] = current_status
+            
+        return self.services.update_one(
+            {"_id": service_id},
+            {
+                "$set": update_data,
+                "$setOnInsert": {
+                    "created_at": datetime.now(timezone.utc)
+                }
+            },
+            upsert=True
+        )
+    
+    def disable_status_monitoring(self, service_id: str, user_id: int):
+        """כיבוי ניטור סטטוס לשירות"""
+        return self.services.update_one(
+            {"_id": service_id},
+            {
+                "$set": {
+                    "status_monitoring.enabled": False,
+                    "status_monitoring.disabled_by": user_id,
+                    "status_monitoring.disabled_at": datetime.now(timezone.utc)
+                }
+            }
+        )
+    
+    def get_status_monitored_services(self):
+        """קבלת רשימת שירותים עם ניטור סטטוס פעיל"""
+        return list(self.services.find({
+            "status_monitoring.enabled": True
+        }))
+    
+    def update_service_status(self, service_id: str, status: str):
+        """עדכון הסטטוס הנוכחי של שירות"""
+        return self.services.update_one(
+            {"_id": service_id},
+            {
+                "$set": {
+                    "last_known_status": status,
+                    "last_status_check": datetime.now(timezone.utc)
+                }
+            }
+        )
+    
+    def record_status_change(self, service_id: str, old_status: str, new_status: str):
+        """רישום שינוי סטטוס בהיסטוריה"""
+        return self.status_changes.insert_one({
+            "service_id": service_id,
+            "old_status": old_status,
+            "new_status": new_status,
+            "timestamp": datetime.now(timezone.utc),
+            "detected_at": datetime.now(timezone.utc)
+        })
+    
+    def record_manual_action(self, service_id: str, action_type: str = "manual"):
+        """רישום פעולה ידנית על שירות"""
+        return self.manual_actions.insert_one({
+            "service_id": service_id,
+            "action_type": action_type,
+            "timestamp": datetime.now(timezone.utc)
+        })
+    
+    def get_last_manual_action(self, service_id: str):
+        """קבלת הפעולה הידנית האחרונה על שירות"""
+        return self.manual_actions.find_one(
+            {"service_id": service_id},
+            sort=[("timestamp", -1)]
+        )
+    
+    def get_status_history(self, service_id: str, limit: int = 10):
+        """קבלת היסטוריית שינויי סטטוס של שירות"""
+        return list(self.status_changes.find(
+            {"service_id": service_id},
+            sort=[("timestamp", -1)],
+            limit=limit
+        ))
+    
+    def get_services_with_monitoring_enabled(self):
+        """קבלת רשימת שירותים עם פרטי הניטור שלהם"""
+        return list(self.services.find(
+            {"status_monitoring.enabled": True},
+            {
+                "_id": 1,
+                "service_name": 1,
+                "last_known_status": 1,
+                "status_monitoring": 1
+            }
+        ))
 
 # יצירת instance גלובלי
 db = Database()
