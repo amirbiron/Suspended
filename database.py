@@ -9,6 +9,7 @@ class Database:
         self.services = self.db.service_activity
         self.user_interactions = self.db.user_interactions
         self.manual_actions = self.db.manual_actions  # Collection for manual actions
+        self.status_changes = self.db.status_changes  # Collection for status change history
         
     def get_service_activity(self, service_id):
         """קבלת נתוני פעילות של שירות"""
@@ -231,6 +232,16 @@ class Database:
         if service:
             return service.get("deploy_notifications_enabled", False)
         return False
+    
+    def record_status_change(self, service_id: str, old_status: str, new_status: str, source: str = "test"):
+        """רישום שינוי סטטוס בהיסטוריה"""
+        return self.status_changes.insert_one({
+            "service_id": service_id,
+            "old_status": old_status,
+            "new_status": new_status,
+            "source": source,
+            "timestamp": datetime.now(timezone.utc)
+        })
 
 # יצירת instance גלובלי
 db = Database()
