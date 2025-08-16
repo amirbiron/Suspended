@@ -98,6 +98,7 @@ class RenderMonitorBot:
             BotCommand("resume", "▶️ החזרת שירותים מושעים"),
             BotCommand("list_suspended", "📋 רשימת מושעים"),
             BotCommand("list_monitored", "👁️ רשימת מנוטרים"),
+            BotCommand("test_monitor", "🧪 בדיקת התראות ניטור"),
             BotCommand("help", "❓ עזרה"),
         ]
         
@@ -167,9 +168,10 @@ class RenderMonitorBot:
 *פקודות ניטור סטטוס:*
 /monitor [service_id] - הפעלת ניטור סטטוס לשירות
 /unmonitor [service_id] - כיבוי ניטור סטטוס לשירות
+/monitor_manage - ניהול ניטור עם כפתורים
 /list_monitored - רשימת שירותים בניטור סטטוס
 /status_history [service_id] - היסטוריית שינויי סטטוס
-/monitor_manage - ניהול ניטור סטטוס עם כפתורים אינטראקטיביים
+/test_monitor [service_id] [action] - בדיקת התראות
 
 /help - הצגת הודעה זו
         """
@@ -924,25 +926,150 @@ class RenderMonitorBot:
         )
 
     async def test_monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """פקודת ניטור בדיקה"""
+        """פקודת בדיקה לסימולציית שינויי סטטוס"""
         if not context.args:
-            await update.message.reply_text("❌ חסר service ID\nשימוש: /test_monitor [service_id]")
+            message = "🧪 *פקודת בדיקת ניטור*\n\n"
+            message += "שימוש: `/test_monitor [service_id] [action]`\n\n"
+            message += "*פעולות אפשריות:*\n"
+            message += "• `online` - סימולציה שהשירות עלה\n"
+            message += "• `offline` - סימולציה שהשירות ירד\n"
+            message += "• `cycle` - מחזור מלא (ירידה ואז עלייה)\n\n"
+            message += "*דוגמה:*\n"
+            message += "`/test_monitor srv-123456 offline`"
+            await update.message.reply_text(message, parse_mode='Markdown')
             return
         
         service_id = context.args[0]
-        user_id = update.effective_user.id
+        action = context.args[1] if len(context.args) > 1 else "cycle"
         
-        # הפעלת הניטור
-        if status_monitor.enable_monitoring(service_id, user_id):
+        # בדיקה אם השירות קיים
+        service = self.db.get_service_activity(service_id)
+        if not service:
+            await update.message.reply_text(f"❌ שירות {service_id} לא נמצא במערכת")
+            return
+        
+        service_name = service.get("service_name", service_id)
+        
+        # בדיקה אם הניטור מופעל
+        monitoring_status = status_monitor.get_monitoring_status(service_id)
+        if not monitoring_status.get("enabled", False):
             await update.message.reply_text(
-                f"✅ ניטור סטטוס הופעל עבור השירות {service_id}\n"
-                f"תקבל התראות כשהשירות יעלה או ירד."
+                f"⚠️ ניטור לא מופעל עבור {service_name}\n"
+                f"הפעל ניטור תחילה עם: `/monitor {service_id}`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # קבלת הסטטוס הנוכחי
+        current_status = service.get("last_known_status", "unknown")
+        
+        await update.message.reply_text(f"🧪 מתחיל בדיקה עבור {service_name}...")
+        
+        if action == "online":
+            # סימולציה של עלייה
+            if current_status == "online":
+                # אם כבר online, קודם נוריד ואז נעלה
+                await self._simulate_status_change(service_id, "online", "offline")
+                await asyncio.sleep(2)
+                await self._simulate_status_change(service_id, "offline", "online")
+                await update.message.reply_text(
+                    "✅ סימולציה הושלמה:\n"
+                    "1️⃣ השירות ירד (offline)\n"
+                    "2️⃣ השירות עלה (online)\n\n"
+                    "🔔 אם הניטור פעיל, אמורת לקבל 2 התראות"
+                )
+            else:
+                await self._simulate_status_change(service_id, current_status, "online")
+                await update.message.reply_text(
+                    "✅ סימולציה הושלמה:\n"
+                    "השירות עלה (online)\n\n"
+                    "🔔 אם הניטור פעיל, אמורת לקבל התראה"
+                )
+                
+        elif action == "offline":
+            # סימולציה של ירידה
+            if current_status == "offline":
+                # אם כבר offline, קודם נעלה ואז נוריד
+                await self._simulate_status_change(service_id, "offline", "online")
+                await asyncio.sleep(2)
+                await self._simulate_status_change(service_id, "online", "offline")
+                await update.message.reply_text(
+                    "✅ סימולציה הושלמה:\n"
+                    "1️⃣ השירות עלה (online)\n"
+                    "2️⃣ השירות ירד (offline)\n\n"
+                    "🔔 אם הניטור פעיל, אמורת לקבל 2 התראות"
+                )
+            else:
+                await self._simulate_status_change(service_id, current_status, "offline")
+                await update.message.reply_text(
+                    "✅ סימולציה הושלמה:\n"
+                    "השירות ירד (offline)\n\n"
+                    "🔔 אם הניטור פעיל, אמורת לקבל התראה"
+                )
+                
+        elif action == "cycle":
+            # מחזור מלא
+            statuses = ["offline", "online", "offline", "online"]
+            previous = current_status
+            
+            message = "🔄 מבצע מחזור בדיקה מלא...\n\n"
+            
+            for i, new_status in enumerate(statuses, 1):
+                await self._simulate_status_change(service_id, previous, new_status)
+                message += f"{i}️⃣ {previous} ➡️ {new_status}\n"
+                previous = new_status
+                await asyncio.sleep(2)  # המתנה בין שינויים
+            
+            await update.message.reply_text(
+                f"✅ מחזור בדיקה הושלם!\n\n{message}\n"
+                f"🔔 אמורת לקבל {len(statuses)} התראות"
             )
         else:
             await update.message.reply_text(
-                f"❌ לא הצלחתי להפעיל ניטור עבור {service_id}\n"
-                f"ודא שה-ID נכון ושהשירות קיים ב-Render."
+                f"❌ פעולה לא מוכרת: {action}\n"
+                "השתמש ב: online, offline, או cycle"
             )
+    
+    async def _simulate_status_change(self, service_id: str, old_status: str, new_status: str):
+        """סימולציה של שינוי סטטוס"""
+        # עדכון הסטטוס במסד הנתונים
+        self.db.update_service_status(service_id, new_status)
+        self.db.record_status_change(service_id, old_status, new_status)
+        
+        # קבלת מידע על השירות
+        service = self.db.get_service_activity(service_id)
+        service_name = service.get("service_name", service_id)
+        
+        # שליחת התראה אם השינוי משמעותי
+        if status_monitor._is_significant_change(old_status, new_status):
+            # יצירת אימוג'י מתאים
+            if new_status == "online":
+                emoji = "🟢"
+                action = "עלה (בדיקה)"
+            elif new_status == "offline":
+                emoji = "🔴"
+                action = "ירד (בדיקה)"
+            else:
+                emoji = "🟡"
+                action = f"שינה סטטוס ל-{new_status} (בדיקה)"
+            
+            # שליחת התראת בדיקה
+            from notifications import send_notification
+            
+            test_message = f"{emoji} *התראת בדיקה - שינוי סטטוס*\n\n"
+            test_message += f"🧪 זוהי הודעת בדיקה!\n\n"
+            test_message += f"🤖 השירות: *{service_name}*\n"
+            test_message += f"🆔 ID: `{service_id}`\n"
+            test_message += f"📊 הפעולה: {action}\n"
+            test_message += f"⬅️ סטטוס קודם: {old_status}\n"
+            test_message += f"➡️ סטטוס חדש: {new_status}\n\n"
+            
+            if new_status == "online":
+                test_message += "✅ השירות חזר לפעילות תקינה"
+            elif new_status == "offline":
+                test_message += "⚠️ השירות ירד ואינו זמין"
+                
+            send_notification(test_message)
 
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
