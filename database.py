@@ -113,7 +113,8 @@ class Database:
         update_data = {
             "status_monitoring.enabled": True,
             "status_monitoring.enabled_by": user_id,
-            "status_monitoring.enabled_at": datetime.now(timezone.utc)
+            "status_monitoring.enabled_at": datetime.now(timezone.utc),
+            "status_monitoring.notify_deploy": True  # ברירת מחדל - התראות על deploy מופעלות
         }
         
         if service_name:
@@ -122,16 +123,19 @@ class Database:
         if current_status:
             update_data["last_known_status"] = current_status
             
-        return self.services.update_one(
+        result = self.services.update_one(
             {"_id": service_id},
             {
                 "$set": update_data,
                 "$setOnInsert": {
-                    "created_at": datetime.now(timezone.utc)
+                    "created_at": datetime.now(timezone.utc),
+                    "status": "active"
                 }
             },
             upsert=True
         )
+        
+        return result.modified_count > 0 or result.upserted_id is not None
     
     def disable_status_monitoring(self, service_id: str, user_id: int):
         """כיבוי ניטור סטטוס לשירות"""
@@ -144,6 +148,13 @@ class Database:
                     "status_monitoring.disabled_at": datetime.now(timezone.utc)
                 }
             }
+        )
+    
+    def toggle_deploy_notifications(self, service_id: str, enable: bool):
+        """הפעלה/כיבוי של התראות deploy לשירות"""
+        return self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"status_monitoring.notify_deploy": enable}}
         )
     
     def get_status_monitored_services(self):

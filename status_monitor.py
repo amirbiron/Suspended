@@ -102,7 +102,7 @@ class StatusMonitor:
         # בדיקה אם יש שינוי משמעותי בסטטוס
         if simplified_status != last_simplified:
             # בדיקה אם זה שינוי שמעניין את המשתמש
-            if self._is_significant_change(last_simplified, simplified_status):
+            if self._is_significant_change(last_simplified, simplified_status, service_doc):
                 # שליחת התראה
                 self._send_status_notification(
                     service_id, 
@@ -137,15 +137,28 @@ class StatusMonitor:
         else:
             return "unknown"
     
-    def _is_significant_change(self, old_status: str, new_status: str) -> bool:
+    def _is_significant_change(self, old_status: str, new_status: str, service_doc: dict = None) -> bool:
         """בדיקה אם השינוי משמעותי ודורש התראה"""
-        # שינויים משמעותיים: online <-> offline
+        # שינויים משמעותיים בסיסיים: online <-> offline
         significant_changes = [
             ("online", "offline"),
             ("offline", "online"),
-            ("deploying", "online"),  # סיום פריסה מוצלח
-            ("deploying", "offline"),  # כשלון בפריסה
         ]
+        
+        # אם יש מידע על השירות, בדוק אם התראות deploy מופעלות
+        if service_doc:
+            notify_deploy = service_doc.get("status_monitoring", {}).get("notify_deploy", True)
+            if notify_deploy:
+                significant_changes.extend([
+                    ("deploying", "online"),  # סיום פריסה מוצלח
+                    ("deploying", "offline"),  # כשלון בפריסה
+                ])
+        else:
+            # ברירת מחדל - כולל התראות deploy
+            significant_changes.extend([
+                ("deploying", "online"),
+                ("deploying", "offline"),
+            ])
         
         return (old_status, new_status) in significant_changes
     
