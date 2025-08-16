@@ -143,7 +143,7 @@ class RenderMonitorBot:
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$"))
         self.app.add_handler(CallbackQueryHandler(self.monitor_detail_callback, pattern="^monitor_detail_"))
-        self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^full_history_|^toggle_deploy_|^disable_monitor_"))
+        self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^full_history_"))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -168,8 +168,8 @@ class RenderMonitorBot:
 *פקודות ניטור סטטוס:*
 /monitor [service_id] - הפעלת ניטור סטטוס לשירות
 /unmonitor [service_id] - כיבוי ניטור סטטוס לשירות
-/list_monitored - רשימת שירותים בניטור
 /monitor_manage - ניהול ניטור עם כפתורים
+/list_monitored - רשימת שירותים בניטור סטטוס
 /status_history [service_id] - היסטוריית שינויי סטטוס
 /test_monitor [service_id] [action] - בדיקת התראות
 
@@ -708,14 +708,6 @@ class RenderMonitorBot:
         status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
         message += f"\nסטטוס נוכחי: {status_emoji} {current_status}\n"
         
-        # סטטוס התראות deploy
-        if is_monitored:
-            notify_deploy = service.get("status_monitoring", {}).get("notify_deploy", True)
-            if notify_deploy:
-                message += "🚀 התראות Deploy: *מופעלות*\n"
-            else:
-                message += "🔇 התראות Deploy: *כבויות*\n"
-        
         # היסטוריה אחרונה
         if history:
             message += "\n📊 *שינויים אחרונים:*\n"
@@ -731,17 +723,6 @@ class RenderMonitorBot:
         keyboard = []
         
         if is_monitored:
-            # כפתור התראות deploy
-            notify_deploy = service.get("status_monitoring", {}).get("notify_deploy", True)
-            if notify_deploy:
-                keyboard.append([
-                    InlineKeyboardButton("🔇 כבה התראות Deploy", callback_data=f"toggle_deploy_{service_id}_off")
-                ])
-            else:
-                keyboard.append([
-                    InlineKeyboardButton("🚀 הפעל התראות Deploy", callback_data=f"toggle_deploy_{service_id}_on")
-                ])
-            
             keyboard.append([
                 InlineKeyboardButton("🔕 כבה ניטור", callback_data=f"disable_monitor_{service_id}")
             ])
@@ -773,27 +754,7 @@ class RenderMonitorBot:
         data = query.data
         user_id = query.from_user.id
         
-        if data.startswith("toggle_deploy_"):
-            # פירוק הנתונים
-            parts = data.replace("toggle_deploy_", "").rsplit("_", 1)
-            service_id = parts[0]
-            action = parts[1]  # "on" או "off"
-            
-            enable = (action == "on")
-            result = self.db.toggle_deploy_notifications(service_id, enable)
-            
-            if result.modified_count > 0:
-                if enable:
-                    await query.answer("🚀 התראות Deploy הופעלו", show_alert=True)
-                else:
-                    await query.answer("🔇 התראות Deploy כובו", show_alert=True)
-                # רענון התצוגה
-                query.data = f"monitor_detail_{service_id}"
-                await self.monitor_detail_callback(update, context)
-            else:
-                await query.answer("❌ שגיאה בעדכון הגדרות", show_alert=True)
-        
-        elif data.startswith("enable_monitor_"):
+        if data.startswith("enable_monitor_"):
             service_id = data.replace("enable_monitor_", "")
             
             if status_monitor.enable_monitoring(service_id, user_id):
@@ -1070,14 +1031,17 @@ class RenderMonitorBot:
             )
     
     async def _simulate_status_change(self, service_id: str, old_status: str, new_status: str):
-        """סימולציה של שינוי סטטוס - ללא עדכון במסד נתונים"""
+        """סימולציה של שינוי סטטוס"""
+        # עדכון הסטטוס במסד הנתונים
+        self.db.update_service_status(service_id, new_status)
+        self.db.record_status_change(service_id, old_status, new_status)
+        
         # קבלת מידע על השירות
         service = self.db.get_service_activity(service_id)
         service_name = service.get("service_name", service_id)
         
         # שליחת התראה אם השינוי משמעותי
-        # בבדיקה, תמיד נשלח התראות deploy (לא בודקים את ההגדרה)
-        if status_monitor._is_significant_change(old_status, new_status, None):
+        if status_monitor._is_significant_change(old_status, new_status):
             # יצירת אימוג'י מתאים
             if new_status == "online":
                 emoji = "🟢"
