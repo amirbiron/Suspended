@@ -1076,7 +1076,8 @@ class RenderMonitorBot:
         service_name = service.get("service_name", service_id)
         
         # שליחת התראה אם השינוי משמעותי
-        if status_monitor._is_significant_change(old_status, new_status):
+        # בבדיקה, תמיד נשלח התראות deploy (לא בודקים את ההגדרה)
+        if status_monitor._is_significant_change(old_status, new_status, None):
             # יצירת אימוג'י מתאים
             if new_status == "online":
                 emoji = "🟢"
