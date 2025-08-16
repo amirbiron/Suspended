@@ -1052,7 +1052,7 @@ class RenderMonitorBot:
                 "_id": service_id,
                 "service_name": f"Test Service {service_id[:8]}",
                 "status": "active",
-                "last_known_status": "unknown",
+                "last_known_status": "online",  # מתחילים עם סטטוס ידוע במקום unknown
                 "created_at": datetime.now(timezone.utc),
                 "is_test": True  # סימון שזו רשומה לבדיקה
             })
@@ -1093,6 +1093,24 @@ class RenderMonitorBot:
         
         # קבלת הסטטוס הנוכחי
         current_status = service.get("last_known_status", "unknown")
+        
+        # אם הסטטוס unknown, נגדיר אותו לפי הפעולה
+        if current_status == "unknown":
+            if action == "online":
+                # אם רוצים לסמלץ עלייה, נגדיר שהשירות כרגע offline
+                current_status = "offline"
+                self.db.update_service_status(service_id, "offline")
+                logger.info(f"Status was unknown, setting to offline for online simulation")
+            elif action == "offline":
+                # אם רוצים לסמלץ ירידה, נגדיר שהשירות כרגע online
+                current_status = "online"
+                self.db.update_service_status(service_id, "online")
+                logger.info(f"Status was unknown, setting to online for offline simulation")
+            else:
+                # למחזור, נתחיל מ-online
+                current_status = "online"
+                self.db.update_service_status(service_id, "online")
+                logger.info(f"Status was unknown, setting to online for cycle simulation")
         
         await update.message.reply_text(
             f"🧪 מתחיל בדיקה עבור {service_name}...\n"
