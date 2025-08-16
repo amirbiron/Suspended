@@ -80,47 +80,6 @@ AUTO_SUSPEND_DAYS = 7    # השעיה אוטומטית אחרי כמה ימים
 CHECK_INTERVAL_HOURS = 24  # תדירות בדיקה
 ```
 
-### ניטור עליות/נפילות (לא יזומות)
-כדי לקבל התראות כאשר שירותים עולים/נופלים שלא בעקבות פעולה שלכם או דיפלוי:
-
-- הוסיפו ל-`.env`:
-```env
-ENABLE_STATE_MONITOR=true
-STATUS_POLL_INTERVAL_MINUTES=5
-ALERT_SUPPRESSION_MINUTES_AFTER_OUR_ACTION=10
-DEPLOY_SUPPRESSION_MINUTES=10
-STATE_ALERT_COOLDOWN_MINUTES=5
-```
-- ניתן להתאים את רשימות המצבים ב-`config.py`:
-  - `RENDER_TRANSIENT_STATUSES` - סטטוסים זמניים בדיפלוי/בניה שלהם לא שולחים התראות
-  - `RENDER_DOWN_STATUSES` - סטטוסים שנחשבים DOWN (למשל: `suspended`, `failed`, `crashed`)
-
-אין לכם CI שמסמן דיפלוי? ניתן לסמן ידנית או לקרוא בפקודה מה-CI/Script:
-- התחלת חלון דיפלוי (דקות): `/deploy_start <minutes> [service_id1 service_id2 ...]`
-- סיום חלון דיפלוי: `/deploy_end [service_id1 service_id2 ...]`
-
-או דרך Webhook HTTP (ללא תלות בספריות):
-1) הגדירו ב-`.env`:
-```env
-ENABLE_CI_HTTP_HOOKS=true
-CI_HTTP_PORT=8088
-CI_SHARED_SECRET=choose_a_long_random_secret
-```
-2) דוגמאות `curl`:
-```bash
-curl -X POST "http://<host>:8088/deploy/start" \
-  -H "X-Deploy-Token: $CI_SHARED_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"minutes": 15, "service_ids": ["srv-123", "srv-456"]}'
-
-curl -X POST "http://<host>:8088/deploy/end" \
-  -H "X-Deploy-Token: $CI_SHARED_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"service_ids": ["srv-123", "srv-456"]}'
-```
-
-המערכת מזהה חלונות דיפלוי ע"י סטטוסים זמניים ומדכאת התראות באותו חלון, וכן מדכאת התראות לזמן קצר אחרי פעולות שהבוט מבצע (כמו `/suspend` או `/resume`). בנוסף יש cooldown בין התראות UP/DOWN כדי למנוע הצפה.
-
 ## 📊 מבנה מסד הנתונים
 
 ### Collection: service_activity
