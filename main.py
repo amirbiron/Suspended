@@ -83,9 +83,9 @@ class RenderMonitorBot:
         self.db = db
         self.render_api = render_api
         self.setup_handlers()
-        self.setup_bot_commands()  # Add bot commands setup
+        # Bot commands will be set up when the bot starts running
         
-    def setup_bot_commands(self):
+    async def setup_bot_commands(self, application):
         """הגדרת תפריט הפקודות בטלגרם"""
         from telegram import BotCommand
         
@@ -105,7 +105,8 @@ class RenderMonitorBot:
         ]
         
         # הגדרת הפקודות בבוט
-        asyncio.create_task(self.app.bot.set_my_commands(commands))
+        await application.bot.set_my_commands(commands)
+        print("✅ פקודות הבוט הוגדרו בהצלחה")
         
     def setup_handlers(self):
         """הוספת command handlers"""
@@ -132,6 +133,9 @@ class RenderMonitorBot:
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$"))
         self.app.add_handler(CallbackQueryHandler(self.monitor_detail_callback, pattern="^monitor_detail_"))
         self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^enable_deploy_notif_|^disable_deploy_notif_"))
+        
+        # Add post_init handler to set up bot commands when the bot starts
+        self.app.post_init = self.setup_bot_commands
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
