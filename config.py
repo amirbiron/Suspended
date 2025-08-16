@@ -35,6 +35,8 @@ CHECK_INTERVAL_HOURS = 24  # בדיקה כל כמה שעות
 # הגדרות ניטור סטטוס
 STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("STATUS_CHECK_INTERVAL_SECONDS", "300"))  # 5 minutes default
 STATUS_MONITORING_ENABLED = os.getenv("STATUS_MONITORING_ENABLED", "true").lower() == "true"
+# New: while any service is deploying, poll faster to catch transitions
+DEPLOY_CHECK_INTERVAL_SECONDS = int(os.getenv("DEPLOY_CHECK_INTERVAL_SECONDS", "30"))
 
 # הגדרות כלליות
 TIMEZONE = "Asia/Jerusalem"

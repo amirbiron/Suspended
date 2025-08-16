@@ -41,7 +41,9 @@ def send_status_change_notification(service_id: str, service_name: str,
     """שליחת התראה על שינוי סטטוס של שירות"""
     message = f"{emoji} *התראת שינוי סטטוס*\n\n"
     message += f"🤖 השירות: *{service_name}*\n"
-    message += f"🆔 ID: `{service_id}`\n"
+    # בטלגרם backticks יכולים לשבור Markdown אם יש תווים מיוחדים ב-ID, נחליף backtick חזרה
+    safe_service_id = str(service_id).replace('`', '\\`')
+    message += f"🆔 ID: `{safe_service_id}`\n"
     message += f"📊 הפעולה: {action}\n"
     message += f"⬅️ סטטוס קודם: {old_status}\n"
     message += f"➡️ סטטוס חדש: {new_status}\n\n"

@@ -854,6 +854,7 @@ class RenderMonitorBot:
             message += "*פעולות אפשריות:*\n"
             message += "• `online` - סימולציה שהשירות עלה\n"
             message += "• `offline` - סימולציה שהשירות ירד\n"
+            message += "• `deploy_ok` - סימולציה: פריסה ואז עלייה (אם התראות דיפלוי מופעלות)\n"
             message += "• `cycle` - מחזור מלא (ירידה ואז עלייה)\n\n"
             message += "*דוגמה:*\n"
             message += "`/test_monitor srv-123456 offline`"
@@ -945,6 +946,19 @@ class RenderMonitorBot:
                 f"✅ מחזור בדיקה הושלם!\n\n{message}\n"
                 f"🔔 אמורת לקבל {len(statuses)} התראות"
             )
+        elif action == "deploy_ok":
+            # בדיקת דגל התראות דיפלוי
+            deploy_enabled = self.db.get_deploy_notification_status(service_id)
+            steps = ["deploying", "online"]
+            previous = current_status if current_status else "offline"
+            for new_status in steps:
+                await self._simulate_status_change(service_id, previous, new_status)
+                previous = new_status
+                await asyncio.sleep(1)
+            if deploy_enabled:
+                await update.message.reply_text("✅ סימולציית דיפלוי הסתיימה. אמור להתקבל עדכון 'סיום פריסה'.")
+            else:
+                await update.message.reply_text("ℹ️ התראות דיפלוי כבויות לשירות זה, לא אמורה לצאת התראת 'סיום פריסה'. הפעל דרך המסך.")
         else:
             await update.message.reply_text(
                 f"❌ פעולה לא מוכרת: {action}\n"
@@ -961,35 +975,20 @@ class RenderMonitorBot:
         service = self.db.get_service_activity(service_id)
         service_name = service.get("service_name", service_id)
         
-        # שליחת התראה אם השינוי משמעותי
-        if status_monitor._is_significant_change(old_status, new_status):
-            # יצירת אימוג'י מתאים
-            if new_status == "online":
-                emoji = "🟢"
-                action = "עלה (בדיקה)"
-            elif new_status == "offline":
-                emoji = "🔴"
-                action = "ירד (בדיקה)"
-            else:
-                emoji = "🟡"
-                action = f"שינה סטטוס ל-{new_status} (בדיקה)"
+        # שליחת התראה אם השינוי משמעותי (כולל דיפלוי כאשר מופעל לשירות)
+        if status_monitor._is_significant_change(old_status, new_status, service_id):
+            # שליחת ההתראה האמיתית לפי הלוגיקה של המנטר
+            status_monitor._send_status_notification(service_id, service_name, old_status, new_status)
             
-            # שליחת התראת בדיקה
+            # בנוסף, שליחת הודעת בדיקה קצרה לצורך ויזואליזציה
             from notifications import send_notification
-            
+            emoji = "🟢" if new_status == "online" else "🔴" if new_status == "offline" else "🟡"
             test_message = f"{emoji} *התראת בדיקה - שינוי סטטוס*\n\n"
             test_message += f"🧪 זוהי הודעת בדיקה!\n\n"
             test_message += f"🤖 השירות: *{service_name}*\n"
             test_message += f"🆔 ID: `{service_id}`\n"
-            test_message += f"📊 הפעולה: {action}\n"
             test_message += f"⬅️ סטטוס קודם: {old_status}\n"
-            test_message += f"➡️ סטטוס חדש: {new_status}\n\n"
-            
-            if new_status == "online":
-                test_message += "✅ השירות חזר לפעילות תקינה"
-            elif new_status == "offline":
-                test_message += "⚠️ השירות ירד ואינו זמין"
-                
+            test_message += f"➡️ סטטוס חדש: {new_status}\n"
             send_notification(test_message)
 
 # ✨ פונקציה שמטפלת בשגיאות
