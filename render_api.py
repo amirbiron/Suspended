@@ -59,12 +59,51 @@ class RenderAPI:
         except requests.RequestException:
             return None
     
+    def _get_latest_deploy_status(self, service_id: str) -> Optional[str]:
+        """מחזיר את סטטוס הדיפלוי האחרון עבור שירות אם זמין"""
+        url = f"{self.base_url}/services/{service_id}/deploys?limit=1"
+        try:
+            response = requests.get(url, headers=self.headers)
+            if response.status_code != 200:
+                return None
+            data = response.json()
+            # תמיכה גם במערך גולמי וגם במבנים {"items": [...]} או {"data": [...]} 
+            if isinstance(data, list):
+                latest = data[0] if data else None
+            else:
+                items = data.get("items") or data.get("data") or []
+                latest = items[0] if items else None
+            if latest and isinstance(latest, dict):
+                return latest.get("status") or latest.get("state")
+            return None
+        except requests.RequestException:
+            return None
+    
     def get_service_status(self, service_id: str) -> Optional[str]:
-        """קבלת סטטוס שירות"""
+        """קבלת סטטוס שירות
+        מנסה קודם את סטטוס הדיפלוי האחרון, ונופל חזרה למידע שירות כולל דגל השעיה.
+        """
+        # קודם ננסה להביא את סטטוס הדיפלוי האחרון
+        deploy_status = self._get_latest_deploy_status(service_id)
+        if deploy_status:
+            return deploy_status
+        
+        # נפילה חזרה למידע שירות כללי
         service_info = self.get_service_info(service_id)
         if service_info:
-            return service_info.get("status", "unknown")
-        return None
+            # אם קיים שדה סטטוס, נחזיר אותו
+            if isinstance(service_info, dict):
+                status = service_info.get("status") or service_info.get("state")
+                if status:
+                    return status
+                # היגיון נוסף: אם השירות מושעה, נחזיר "suspended" כדי למפות ל-offline
+                if service_info.get("suspended") is True:
+                    return "suspended"
+                # ייתכנו מצבים שבהם אין סטטוס אבל יש אינדיקציה לפעילות
+                if service_info.get("suspenders"):
+                    return "suspended"
+        # אם לא הצלחנו לקבוע סטטוס
+        return "unknown"
     
     def list_services(self) -> list:
         """רשימת כל השירותים"""
@@ -83,7 +122,7 @@ class RenderAPI:
         services = self.list_services()
         return [
             service for service in services 
-            if service.get("status") == "suspended"
+            if service.get("status") == "suspended" or service.get("suspended") is True
         ]
 
 # יצירת instance גלובלי
