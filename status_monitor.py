@@ -102,7 +102,7 @@ class StatusMonitor:
         # בדיקה אם יש שינוי משמעותי בסטטוס
         if simplified_status != last_simplified:
             # בדיקה אם זה שינוי שמעניין את המשתמש
-            if self._is_significant_change(last_simplified, simplified_status):
+            if self._is_significant_change(last_simplified, simplified_status, service_id):
                 # שליחת התראה
                 self._send_status_notification(
                     service_id, 
@@ -113,7 +113,10 @@ class StatusMonitor:
                 
             # עדכון הסטטוס במסד הנתונים
             db.update_service_status(service_id, simplified_status)
-            db.record_status_change(service_id, last_simplified, simplified_status)
+            
+            # רישום בהיסטוריה רק אם התכונה מופעלת
+            if config.ENABLE_STATUS_HISTORY:
+                db.record_status_change(service_id, last_simplified, simplified_status)
             
     def _simplify_status(self, status: str) -> str:
         """המרת סטטוס Render לסטטוס פשוט"""
@@ -137,15 +140,22 @@ class StatusMonitor:
         else:
             return "unknown"
     
-    def _is_significant_change(self, old_status: str, new_status: str) -> bool:
+    def _is_significant_change(self, old_status: str, new_status: str, service_id: str = None) -> bool:
         """בדיקה אם השינוי משמעותי ודורש התראה"""
         # שינויים משמעותיים: online <-> offline
         significant_changes = [
             ("online", "offline"),
             ("offline", "online"),
-            ("deploying", "online"),  # סיום פריסה מוצלח
-            ("deploying", "offline"),  # כשלון בפריסה
         ]
+        
+        # הוספת התראות על סיום דיפלוי אם מופעל עבור השירות הספציפי
+        if service_id:
+            deploy_notifications_enabled = db.get_deploy_notification_status(service_id)
+            if deploy_notifications_enabled:
+                significant_changes.extend([
+                    ("deploying", "online"),  # סיום פריסה מוצלח
+                    ("deploying", "offline"),  # כשלון בפריסה
+                ])
         
         return (old_status, new_status) in significant_changes
     

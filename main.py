@@ -139,11 +139,18 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("monitor_manage", self.monitor_manage_command)) # New handler
         self.app.add_handler(CommandHandler("test_monitor", self.test_monitor_command))  # Test command
         
+        # History management commands
+        self.app.add_handler(CommandHandler("clear_history", self.clear_history_command))
+        self.app.add_handler(CommandHandler("clear_test_data", self.clear_test_data_command))
+        self.app.add_handler(CommandHandler("toggle_history", self.toggle_history_command))
+        self.app.add_handler(CommandHandler("toggle_deploy_notifications", self.toggle_deploy_notifications_command))
+        
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$"))
         self.app.add_handler(CallbackQueryHandler(self.monitor_detail_callback, pattern="^monitor_detail_"))
-        self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^full_history_"))
+        self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^full_history_|^enable_deploy_notif_|^disable_deploy_notif_"))
+        self.app.add_handler(CallbackQueryHandler(self.clear_history_callback, pattern="^confirm_clear_all_history|^cancel_clear_history$"))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -254,8 +261,75 @@ class RenderMonitorBot:
         
         await update.message.reply_text(message, parse_mode='Markdown')
     
+    async def clear_history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מחיקת היסטוריית סטטוס"""
+        # בדיקת הרשאות (רק אדמין)
+        if str(update.effective_user.id) != config.ADMIN_CHAT_ID:
+            await update.message.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
+            return
+        
+        service_id = context.args[0] if context.args else None
+        
+        if service_id:
+            count = db.clear_status_history(service_id)
+            await update.message.reply_text(f"✅ נמחקו {count} רשומות היסטוריה עבור {service_id}")
+        else:
+            # אישור לפני מחיקת כל ההיסטוריה
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ אישור מחיקה", callback_data="confirm_clear_all_history"),
+                    InlineKeyboardButton("❌ ביטול", callback_data="cancel_clear_history")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "⚠️ האם אתה בטוח שברצונך למחוק את כל היסטוריית הסטטוס?",
+                reply_markup=reply_markup
+            )
+    
+    async def clear_test_data_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מחיקת נתוני בדיקות דמה"""
+        # בדיקת הרשאות (רק אדמין)
+        if str(update.effective_user.id) != config.ADMIN_CHAT_ID:
+            await update.message.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
+            return
+        
+        count = db.clear_test_data()
+        await update.message.reply_text(f"✅ נמחקו {count} רשומות בדיקה מההיסטוריה\n✅ אופסו סטטוסים של שירותים בבדיקה")
+    
+    async def toggle_history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הפעלה/כיבוי של תכונת ההיסטוריה"""
+        # בדיקת הרשאות (רק אדמין)
+        if str(update.effective_user.id) != config.ADMIN_CHAT_ID:
+            await update.message.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
+            return
+        
+        current_state = config.ENABLE_STATUS_HISTORY
+        config.ENABLE_STATUS_HISTORY = not current_state
+        
+        status = "מופעלת" if config.ENABLE_STATUS_HISTORY else "כבויה"
+        await update.message.reply_text(f"✅ תכונת ההיסטוריה כעת {status}")
+    
+    async def toggle_deploy_notifications_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הפעלה/כיבוי של התראות דיפלוי"""
+        # בדיקת הרשאות (רק אדמין)
+        if str(update.effective_user.id) != config.ADMIN_CHAT_ID:
+            await update.message.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
+            return
+        
+        current_state = config.ENABLE_DEPLOYMENT_NOTIFICATIONS
+        config.ENABLE_DEPLOYMENT_NOTIFICATIONS = not current_state
+        
+        status = "מופעלות" if config.ENABLE_DEPLOYMENT_NOTIFICATIONS else "כבויות"
+        await update.message.reply_text(f"✅ התראות דיפלוי כעת {status}")
+    
     async def status_history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הצגת היסטוריית שינויי סטטוס של שירות"""
+        # בדיקה אם ההיסטוריה מופעלת
+        if not config.ENABLE_STATUS_HISTORY:
+            await update.message.reply_text("📵 תכונת ההיסטוריה כבויה כרגע")
+            return
+            
         if not context.args:
             await update.message.reply_text("❌ חסר service ID\nשימוש: /status_history [service_id]")
             return
@@ -584,92 +658,43 @@ class RenderMonitorBot:
             await self.manage_command(update.callback_query, context)
 
     async def suspend_button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """מטפל בלחיצה על כפתורי האישור להשעיה"""
+        """טיפול בכפתורי אישור/ביטול השעיה כללית"""
         query = update.callback_query
         await query.answer()
-
+        
         if query.data == "confirm_suspend_all":
-            await query.edit_message_text(text="מאשר... מתחיל בתהליך השעיה כללי.")
-            services = self.db.get_all_services()
+            # השעיית כל השירותים
             suspended_count = 0
-            for service in services:
+            all_services = db.get_all_services()
+            
+            for service in all_services:
+                service_id = service["_id"]
                 if service.get("status") != "suspended":
-                    try:
-                        service_id = service['_id']
-                        # סימון פעולה ידנית במנטר הסטטוס
-                        status_monitor.mark_manual_action(service_id)
-                        
-                        self.render_api.suspend_service(service_id)
-                        self.db.update_service_activity(service_id, status="suspended")
-                        self.db.increment_suspend_count(service_id)
+                    success = render_api.suspend_service(service_id)
+                    if success:
+                        db.update_service_activity(service_id, {"status": "suspended", "suspended_at": datetime.now(timezone.utc)})
                         suspended_count += 1
-                    except Exception as e:
-                        print(f"Could not suspend service {service['_id']}: {e}")
             
-            await query.edit_message_text(text=f"✅ הושלם. {suspended_count} שירותים הושהו.")
-
-        elif query.data == "cancel_suspend":
-            await query.edit_message_text(text="הפעולה בוטלה.")
-
-    async def monitor_manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ניהול ניטור סטטוס עם כפתורים אינטראקטיביים"""
-        # קבלת רשימת השירותים
-        services = self.db.get_all_services()
+            await query.edit_message_text(
+                f"✅ הושעו {suspended_count} שירותים",
+                parse_mode='Markdown'
+            )
+        else:
+            # ביטול - חזרה לתפריט הניהול
+            await self.manage_command(query, context)
+    
+    async def clear_history_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """טיפול בכפתורי אישור/ביטול מחיקת היסטוריה"""
+        query = update.callback_query
+        await query.answer()
         
-        if not services:
-            await update.message.reply_text("📭 אין שירותים במערכת")
-            return
-        
-        # יצירת כפתורים
-        keyboard = []
-        
-        for service in services:
-            service_id = service["_id"]
-            service_name = service.get("service_name", service_id)
-            
-            # בדיקה אם הניטור מופעל
-            monitoring_status = status_monitor.get_monitoring_status(service_id)
-            is_monitored = monitoring_status.get("enabled", False)
-            
-            # סטטוס נוכחי
-            current_status = service.get("last_known_status", "unknown")
-            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
-            
-            # אימוג'י ניטור
-            monitor_emoji = "👁️" if is_monitored else "👁️‍🗨️"
-            
-            # טקסט הכפתור
-            button_text = f"{status_emoji} {monitor_emoji} {service_name[:20]}"
-            
-            keyboard.append([
-                InlineKeyboardButton(
-                    button_text,
-                    callback_data=f"monitor_detail_{service_id}"
-                )
-            ])
-        
-        # כפתור לרשימת המנוטרים
-        keyboard.append([
-            InlineKeyboardButton("📊 הצג רק מנוטרים", callback_data="show_monitored_only")
-        ])
-        
-        # כפתור רענון
-        keyboard.append([
-            InlineKeyboardButton("🔄 רענן", callback_data="refresh_monitor_manage")
-        ])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        message = "🎛️ *ניהול ניטור סטטוס*\n\n"
-        message += "👁️ = בניטור | 👁️‍🗨️ = לא בניטור\n"
-        message += "🟢 = פעיל | 🔴 = כבוי | 🟡 = לא ידוע\n\n"
-        message += "בחר שירות לניהול:"
-        
-        await update.message.reply_text(
-            message,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+        if query.data == "confirm_clear_all_history":
+            # מחיקת כל ההיסטוריה
+            count = db.clear_status_history()
+            await query.edit_message_text(f"✅ נמחקו {count} רשומות היסטוריה")
+        else:
+            # ביטול
+            await query.edit_message_text("❌ המחיקה בוטלה")
     
     async def monitor_detail_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הצגת פרטי שירות וכפתורי ניהול ניטור"""
@@ -687,6 +712,7 @@ class RenderMonitorBot:
         service_name = service.get("service_name", service_id)
         monitoring_status = status_monitor.get_monitoring_status(service_id)
         is_monitored = monitoring_status.get("enabled", False)
+        deploy_notifications = self.db.get_deploy_notification_status(service_id)
         
         # קבלת היסטוריה אחרונה
         history = self.db.get_status_history(service_id, limit=3)
@@ -702,6 +728,12 @@ class RenderMonitorBot:
                 message += f"מנוטר מאז: {enabled_at.strftime('%d/%m/%Y')}\n"
         else:
             message += "❌ *ניטור כבוי*\n"
+        
+        # סטטוס התראות דיפלוי
+        if deploy_notifications:
+            message += "🚀 *התראות דיפלוי: מופעלות*\n"
+        else:
+            message += "🔇 *התראות דיפלוי: כבויות*\n"
         
         # סטטוס נוכחי
         current_status = service.get("last_known_status", "unknown")
@@ -734,6 +766,16 @@ class RenderMonitorBot:
                 InlineKeyboardButton("🔔 הפעל ניטור", callback_data=f"enable_monitor_{service_id}")
             ])
         
+        # כפתור התראות דיפלוי
+        if deploy_notifications:
+            keyboard.append([
+                InlineKeyboardButton("🔇 כבה התראות דיפלוי", callback_data=f"disable_deploy_notif_{service_id}")
+            ])
+        else:
+            keyboard.append([
+                InlineKeyboardButton("🚀 הפעל התראות דיפלוי", callback_data=f"enable_deploy_notif_{service_id}")
+            ])
+        
         keyboard.append([
             InlineKeyboardButton("🔙 חזור לרשימה", callback_data="back_to_monitor_list")
         ])
@@ -749,7 +791,6 @@ class RenderMonitorBot:
     async def monitor_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """טיפול בפעולות ניטור"""
         query = update.callback_query
-        await query.answer()
         
         data = query.data
         user_id = query.from_user.id
@@ -758,7 +799,7 @@ class RenderMonitorBot:
             service_id = data.replace("enable_monitor_", "")
             
             if status_monitor.enable_monitoring(service_id, user_id):
-                await query.answer("✅ ניטור הופעל", show_alert=True)
+                await query.answer("✅ ניטור הופעל בהצלחה!", show_alert=True)
                 # רענון התצוגה
                 query.data = f"monitor_detail_{service_id}"
                 await self.monitor_detail_callback(update, context)
@@ -769,7 +810,7 @@ class RenderMonitorBot:
             service_id = data.replace("disable_monitor_", "")
             
             if status_monitor.disable_monitoring(service_id, user_id):
-                await query.answer("✅ ניטור כובה", show_alert=True)
+                await query.answer("✅ ניטור כובה בהצלחה!", show_alert=True)
                 # רענון התצוגה
                 query.data = f"monitor_detail_{service_id}"
                 await self.monitor_detail_callback(update, context)
@@ -778,17 +819,37 @@ class RenderMonitorBot:
         
         elif data == "back_to_monitor_list":
             # חזרה לרשימה הראשית
+            await query.answer()
             await self.refresh_monitor_manage(query)
         
         elif data == "refresh_monitor_manage":
+            await query.answer()
             await self.refresh_monitor_manage(query)
         
         elif data == "show_monitored_only":
+            await query.answer()
             await self.show_monitored_only(query)
         
         elif data.startswith("full_history_"):
+            await query.answer()
             service_id = data.replace("full_history_", "")
             await self.show_full_history(query, service_id)
+
+        elif data.startswith("enable_deploy_notif_"):
+            service_id = data.replace("enable_deploy_notif_", "")
+            self.db.toggle_deploy_notifications(service_id, True)
+            await query.answer("🚀 התראות דיפלוי הופעלו בהצלחה!", show_alert=True)
+            # רענון התצוגה
+            query.data = f"monitor_detail_{service_id}"
+            await self.monitor_detail_callback(update, context)
+        
+        elif data.startswith("disable_deploy_notif_"):
+            service_id = data.replace("disable_deploy_notif_", "")
+            self.db.toggle_deploy_notifications(service_id, False)
+            await query.answer("🔇 התראות דיפלוי כבויות בהצלחה!", show_alert=True)
+            # רענון התצוגה
+            query.data = f"monitor_detail_{service_id}"
+            await self.monitor_detail_callback(update, context)
     
     async def refresh_monitor_manage(self, query):
         """רענון רשימת הניטור"""

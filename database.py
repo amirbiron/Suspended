@@ -197,6 +197,51 @@ class Database:
             limit=limit
         ))
     
+    def clear_status_history(self, service_id: str = None):
+        """מחיקת היסטוריית סטטוס - אם service_id לא מסופק, מוחק הכל"""
+        if service_id:
+            result = self.status_changes.delete_many({"service_id": service_id})
+        else:
+            result = self.status_changes.delete_many({})
+        return result.deleted_count
+    
+    def clear_test_data(self):
+        """מחיקת נתוני בדיקות דמה מהמערכת"""
+        # מחיקת היסטוריית סטטוס של בדיקות
+        result = self.status_changes.delete_many({
+            "$or": [
+                {"from_status": "test"},
+                {"to_status": "test"},
+                {"service_id": {"$regex": "test", "$options": "i"}}
+            ]
+        })
+        
+        # איפוס סטטוס של שירותים שנמצאים במצב בדיקה
+        self.services.update_many(
+            {"last_known_status": {"$in": ["test", "testing"]}},
+            {"$unset": {"last_known_status": 1, "status_monitoring.last_check": 1}}
+        )
+        
+        # איפוס last_activity עבור שירותים שהפעילות האחרונה שלהם הייתה בדיקה
+        # זה ימנע מהם להופיע כפעילים בניהול סטטוס
+        self.services.update_many(
+            {"$or": [
+                {"last_activity": {"$regex": "test", "$options": "i"}},
+                {"service_name": {"$regex": "test", "$options": "i"}}
+            ]},
+            {"$unset": {"last_activity": 1, "last_activity_date": 1}}
+        )
+        
+        # מחיקת פעולות ידניות של בדיקות
+        self.manual_actions.delete_many({
+            "$or": [
+                {"action": {"$regex": "test", "$options": "i"}},
+                {"service_id": {"$regex": "test", "$options": "i"}}
+            ]
+        })
+        
+        return result.deleted_count
+    
     def get_services_with_monitoring_enabled(self):
         """קבלת רשימת שירותים עם פרטי הניטור שלהם"""
         return list(self.services.find(
@@ -208,6 +253,20 @@ class Database:
                 "status_monitoring": 1
             }
         ))
+    
+    def toggle_deploy_notifications(self, service_id: str, enabled: bool):
+        """הפעלה/כיבוי התראות דיפלוי לשירות ספציפי"""
+        return self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"deploy_notifications_enabled": enabled}}
+        )
+    
+    def get_deploy_notification_status(self, service_id: str):
+        """קבלת סטטוס התראות דיפלוי לשירות"""
+        service = self.services.find_one({"_id": service_id})
+        if service:
+            return service.get("deploy_notifications_enabled", False)
+        return False
 
 # יצירת instance גלובלי
 db = Database()
