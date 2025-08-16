@@ -22,6 +22,9 @@ class StatusMonitor:
         self.check_interval = config.STATUS_CHECK_INTERVAL_SECONDS
         self.monitoring_thread = None
         self.stop_monitoring = threading.Event()
+        # New: faster polling while a deployment is active
+        self.deploy_check_interval = getattr(config, "DEPLOY_CHECK_INTERVAL_SECONDS", 30)
+        self.deploying_active = False
         
     def start_monitoring(self):
         """הפעלת ניטור הסטטוס ברקע"""
@@ -50,7 +53,8 @@ class StatusMonitor:
                 logger.error(f"Error in monitoring loop: {e}")
             
             # המתנה עם אפשרות לעצירה מיידית
-            self.stop_monitoring.wait(self.check_interval)
+            sleep_seconds = self.deploy_check_interval if self.deploying_active else self.check_interval
+            self.stop_monitoring.wait(sleep_seconds)
     
     def check_all_services(self):
         """בדיקת הסטטוס של כל השירותים המנוטרים"""
@@ -59,29 +63,38 @@ class StatusMonitor:
         # קבלת רשימת השירותים לניטור מהדאטאבייס
         monitored_services = db.get_status_monitored_services()
         
+        any_deploying = False
         for service_doc in monitored_services:
             service_id = service_doc["_id"]
             
             # דילוג על שירותים שלא מופעל עבורם ניטור
             if not service_doc.get("status_monitoring", {}).get("enabled", False):
                 continue
-                
+            
             # בדיקה אם השירות עבר פעולה ידנית לאחרונה
             if self._is_manual_action_recent(service_id):
                 logger.debug(f"Skipping {service_id} - recent manual action")
                 continue
-                
+            
             try:
                 # קבלת הסטטוס הנוכחי מ-Render
                 current_status = render_api.get_service_status(service_id)
                 
                 if current_status:
+                    # בדיקה האם יש שירות כלשהו במצב פריסה כדי להאיץ בדיקות
+                    simplified_for_flag = self._simplify_status(current_status)
+                    if simplified_for_flag == "deploying":
+                        any_deploying = True
+                    
                     self._process_status_change(service_id, current_status, service_doc)
                 else:
                     logger.warning(f"Could not get status for service {service_id}")
                     
             except Exception as e:
                 logger.error(f"Error checking status for {service_id}: {e}")
+        
+        # עדכון דגל פריסה פעילה עבור קצב הבדיקה
+        self.deploying_active = any_deploying
     
     def _process_status_change(self, service_id: str, current_status: str, service_doc: dict):
         """עיבוד שינוי סטטוס"""
@@ -115,26 +128,38 @@ class StatusMonitor:
             db.update_service_status(service_id, simplified_status)
             
     def _simplify_status(self, status: str) -> str:
-        """המרת סטטוס Render לסטטוס פשוט"""
+        """המרת סטטוס Render לסטטוסים פשוטים: online/offline/deploying/unknown"""
         if status is None:
             return "unknown"
-            
+        
         status_lower = status.lower()
         
-        # סטטוסים שמציינים שהשירות פועל
-        if status_lower in ["running", "deployed", "active", "healthy"]:
+        # Online indicators
+        if (
+            status_lower in ["running", "deployed", "active", "healthy"]
+            or any(k in status_lower for k in ["live", "ready", "ok", "available"])
+        ):
             return "online"
-            
-        # סטטוסים שמציינים שהשירות לא פועל
-        elif status_lower in ["suspended", "stopped", "failed", "error", "crashed"]:
+        
+        # Offline indicators
+        if (
+            status_lower in ["suspended", "stopped", "failed", "error", "crashed"]
+            or any(k in status_lower for k in ["unhealthy", "inactive", "down"])
+        ):
             return "offline"
-            
-        # סטטוסים של תהליך פריסה
-        elif status_lower in ["deploying", "building", "starting", "restarting"]:
+        
+        # Deploying/building/starting indicators
+        if (
+            status_lower in ["deploying", "building", "starting", "restarting"]
+            or any(k in status_lower for k in [
+                "deploy_in_progress", "build_in_progress", "update_in_progress",
+                "progress", "provision", "initializ", "pending", "queue", "updat"
+            ])
+            or "deploy" in status_lower or "build" in status_lower or "start" in status_lower
+        ):
             return "deploying"
-            
-        else:
-            return "unknown"
+        
+        return "unknown"
     
     def _is_significant_change(self, old_status: str, new_status: str, service_id: str = None) -> bool:
         """בדיקה אם השינוי משמעותי ודורש התראה"""
@@ -174,8 +199,14 @@ class StatusMonitor:
                     logger.info(f"Skipping notification for {service_name} - recent manual action")
                     return
         
-        # יצירת אימוג'י מתאים
-        if new_status == "online":
+        # יצירת אימוג'י וטקסט פעולה מתאימים
+        if old_status == "deploying" and new_status == "online":
+            emoji = "🚀"
+            action = "סיום פריסה מוצלח"
+        elif old_status == "deploying" and new_status == "offline":
+            emoji = "⚠️"
+            action = "כשלון בפריסה"
+        elif new_status == "online":
             emoji = "🟢"
             action = "עלה"
         elif new_status == "offline":
@@ -184,7 +215,7 @@ class StatusMonitor:
         else:
             emoji = "🟡"
             action = f"שינה סטטוס ל-{new_status}"
-            
+        
         # שליחת ההתראה
         send_status_change_notification(
             service_id=service_id,
