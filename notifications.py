@@ -73,20 +73,3 @@ def send_daily_report():
                 message += f"• {name}\n"
     
     send_notification(message)
-
-def format_down_alert(service_name: str, service_id: str, new_status: str):
-    return (
-        f"🚨 שירות נפל\n"
-        f"שירות: {service_name}\n"
-        f"ID: {service_id}\n"
-        f"סטטוס: {new_status}"
-    )
-
-
-def format_up_alert(service_name: str, service_id: str, new_status: str):
-    return (
-        f"✅ שירות עלה\n"
-        f"שירות: {service_name}\n"
-        f"ID: {service_id}\n"
-        f"סטטוס: {new_status}"
-    )
