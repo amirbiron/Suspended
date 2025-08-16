@@ -604,7 +604,7 @@ class RenderMonitorBot:
                 if service.get("status") != "suspended":
                     success = render_api.suspend_service(service_id)
                     if success:
-                        db.update_service_activity(service_id, {"status": "suspended", "suspended_at": datetime.now(timezone.utc)})
+                        db.update_service_activity(service_id, status="suspended")
                         suspended_count += 1
             
             await query.edit_message_text(
@@ -616,12 +616,12 @@ class RenderMonitorBot:
             await self.manage_command(query, context)
     
 
-    async def monitor_detail_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def monitor_detail_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE, service_id_override: str = None):
         """הצגת פרטי שירות וכפתורי ניהול ניטור"""
         query = update.callback_query
         await query.answer()
         
-        service_id = query.data.replace("monitor_detail_", "")
+        service_id = service_id_override or query.data.replace("monitor_detail_", "")
         
         # קבלת מידע על השירות
         service = self.db.get_service_activity(service_id)
@@ -703,9 +703,8 @@ class RenderMonitorBot:
             
             if status_monitor.enable_monitoring(service_id, user_id):
                 await query.answer("✅ ניטור הופעל בהצלחה!", show_alert=True)
-                # רענון התצוגה
-                query.data = f"monitor_detail_{service_id}"
-                await self.monitor_detail_callback(update, context)
+                # רענון התצוגה ללא שינוי query.data
+                await self.monitor_detail_callback(update, context, service_id_override=service_id)
             else:
                 await query.answer("❌ שגיאה בהפעלת ניטור", show_alert=True)
         
@@ -714,9 +713,8 @@ class RenderMonitorBot:
             
             if status_monitor.disable_monitoring(service_id, user_id):
                 await query.answer("✅ ניטור כובה בהצלחה!", show_alert=True)
-                # רענון התצוגה
-                query.data = f"monitor_detail_{service_id}"
-                await self.monitor_detail_callback(update, context)
+                # רענון התצוגה ללא שינוי query.data
+                await self.monitor_detail_callback(update, context, service_id_override=service_id)
             else:
                 await query.answer("❌ שגיאה בכיבוי ניטור", show_alert=True)
         
@@ -737,17 +735,15 @@ class RenderMonitorBot:
             service_id = data.replace("enable_deploy_notif_", "")
             self.db.toggle_deploy_notifications(service_id, True)
             await query.answer("🚀 התראות דיפלוי הופעלו בהצלחה!", show_alert=True)
-            # רענון התצוגה
-            query.data = f"monitor_detail_{service_id}"
-            await self.monitor_detail_callback(update, context)
+            # רענון התצוגה ללא שינוי query.data
+            await self.monitor_detail_callback(update, context, service_id_override=service_id)
         
         elif data.startswith("disable_deploy_notif_"):
             service_id = data.replace("disable_deploy_notif_", "")
             self.db.toggle_deploy_notifications(service_id, False)
             await query.answer("🔇 התראות דיפלוי כבויות בהצלחה!", show_alert=True)
-            # רענון התצוגה
-            query.data = f"monitor_detail_{service_id}"
-            await self.monitor_detail_callback(update, context)
+            # רענון התצוגה ללא שינוי query.data
+            await self.monitor_detail_callback(update, context, service_id_override=service_id)
     
     async def refresh_monitor_manage(self, query):
         """רענון רשימת הניטור"""
