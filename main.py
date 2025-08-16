@@ -725,7 +725,16 @@ class RenderMonitorBot:
                 timestamp = change.get("timestamp")
                 if timestamp:
                     time_str = timestamp.strftime("%d/%m %H:%M")
-                    message += f"• {time_str}: {old_status}→{new_status}\n"
+                    # אימוג'י מיוחד ל-deploy
+                    if old_status == "deploying" and new_status == "online":
+                        change_emoji = "🚀"
+                    elif old_status == "deploying" and new_status == "offline":
+                        change_emoji = "💥"
+                    elif new_status == "deploying":
+                        change_emoji = "🔄"
+                    else:
+                        change_emoji = "•"
+                    message += f"{change_emoji} {time_str}: {old_status}→{new_status}\n"
         
         # כפתורים
         keyboard = []

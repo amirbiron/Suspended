@@ -182,12 +182,23 @@ class StatusMonitor:
                     return
         
         # יצירת אימוג'י מתאים
-        if new_status == "online":
+        if old_status == "deploying" and new_status == "online":
+            # Deploy הצליח!
+            emoji = "🚀"
+            action = "סיים Deploy בהצלחה"
+        elif old_status == "deploying" and new_status == "offline":
+            # Deploy נכשל
+            emoji = "💥"
+            action = "Deploy נכשל"
+        elif new_status == "online":
             emoji = "🟢"
             action = "עלה"
         elif new_status == "offline":
             emoji = "🔴"
             action = "ירד"
+        elif new_status == "deploying":
+            emoji = "🔄"
+            action = "מתחיל Deploy"
         else:
             emoji = "🟡"
             action = f"שינה סטטוס ל-{new_status}"
