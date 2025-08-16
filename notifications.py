@@ -46,20 +46,13 @@ def send_status_change_notification(service_id: str, service_name: str,
     message += f"⬅️ סטטוס קודם: {old_status}\n"
     message += f"➡️ סטטוס חדש: {new_status}\n\n"
     
-    # הוספת הסבר למשמעות - עם הודעות מיוחדות ל-deploy
-    if old_status == "deploying" and new_status == "online":
-        message += "✅ *Deploy הושלם בהצלחה!*\n"
-        message += "🎉 השירות חזר לפעילות מלאה"
-    elif old_status == "deploying" and new_status == "offline":
-        message += "⚠️ *Deploy נכשל!*\n"
-        message += "🔧 בדוק את הלוגים ב-Render"
-    elif new_status == "online":
+    # הוספת הסבר למשמעות
+    if new_status == "online":
         message += "✅ השירות חזר לפעילות תקינה"
     elif new_status == "offline":
         message += "⚠️ השירות ירד ואינו זמין"
     elif new_status == "deploying":
-        message += "🔄 השירות בתהליך פריסה\n"
-        message += "⏳ ממתין לסיום הפריסה..."
+        message += "🔄 השירות בתהליך פריסה"
         
     return send_notification(message)
 
