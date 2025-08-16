@@ -136,14 +136,14 @@ class StatusMonitor:
         
         # Online indicators
         if (
-            status_lower in ["running", "deployed", "active", "healthy"]
+            status_lower in ["running", "deployed", "active", "healthy", "succeeded", "success", "completed", "complete", "finished"]
             or any(k in status_lower for k in ["live", "ready", "ok", "available"])
         ):
             return "online"
         
         # Offline indicators
         if (
-            status_lower in ["suspended", "stopped", "failed", "error", "crashed"]
+            status_lower in ["suspended", "stopped", "failed", "error", "crashed", "canceled", "cancelled", "aborted"]
             or any(k in status_lower for k in ["unhealthy", "inactive", "down"])
         ):
             return "offline"
