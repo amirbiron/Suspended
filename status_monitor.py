@@ -110,13 +110,9 @@ class StatusMonitor:
                     last_simplified, 
                     simplified_status
                 )
-                
+            
             # עדכון הסטטוס במסד הנתונים
             db.update_service_status(service_id, simplified_status)
-            
-            # רישום בהיסטוריה רק אם התכונה מופעלת
-            if config.ENABLE_STATUS_HISTORY:
-                db.record_status_change(service_id, last_simplified, simplified_status)
             
     def _simplify_status(self, status: str) -> str:
         """המרת סטטוס Render לסטטוס פשוט"""

@@ -98,59 +98,40 @@ class RenderMonitorBot:
             BotCommand("resume", "▶️ החזרת שירותים מושעים"),
             BotCommand("list_suspended", "📋 רשימת מושעים"),
             BotCommand("list_monitored", "👁️ רשימת מנוטרים"),
-            BotCommand("test_monitor", "🧪 בדיקת התראות ניטור"),
-            BotCommand("help", "❓ עזרה"),
+            BotCommand("monitor", "🔔 הפעלת ניטור סטטוס"),
+            BotCommand("unmonitor", "🔕 כיבוי ניטור סטטוס"),
+            BotCommand("test_monitor", "🧪 בדיקת ניטור"),
+            BotCommand("help", "❓ עזרה ומידע")
         ]
         
-        # Set the commands asynchronously
-        async def set_commands():
-            await self.app.bot.set_my_commands(commands)
-            print("✅ תפריט פקודות הוגדר בהצלחה")
-        
-        # Run the async function
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If loop is already running, create a task
-                asyncio.create_task(set_commands())
-            else:
-                # If loop is not running, run until complete
-                loop.run_until_complete(set_commands())
-        except Exception as e:
-            print(f"⚠️ לא הצלחתי להגדיר תפריט פקודות: {e}")
+        # הגדרת הפקודות בבוט
+        asyncio.create_task(self.app.bot.set_my_commands(commands))
         
     def setup_handlers(self):
         """הוספת command handlers"""
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("status", self.status_command))
+        self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(CommandHandler("suspend", self.suspend_command))
         self.app.add_handler(CommandHandler("resume", self.resume_command))
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
-        self.app.add_handler(CommandHandler("suspend_one", self.suspend_one_command))
-        self.app.add_handler(CommandHandler("manage", self.manage_command))
         
-        # New status monitoring commands
+        # Monitor commands
         self.app.add_handler(CommandHandler("monitor", self.monitor_command))
         self.app.add_handler(CommandHandler("unmonitor", self.unmonitor_command))
         self.app.add_handler(CommandHandler("list_monitored", self.list_monitored_command))
-        self.app.add_handler(CommandHandler("status_history", self.status_history_command))
         self.app.add_handler(CommandHandler("monitor_manage", self.monitor_manage_command)) # New handler
         self.app.add_handler(CommandHandler("test_monitor", self.test_monitor_command))  # Test command
         
-        # History management commands
-        self.app.add_handler(CommandHandler("clear_history", self.clear_history_command))
+        # Cleanup command for test data
         self.app.add_handler(CommandHandler("clear_test_data", self.clear_test_data_command))
-        self.app.add_handler(CommandHandler("toggle_history", self.toggle_history_command))
-        self.app.add_handler(CommandHandler("toggle_deploy_notifications", self.toggle_deploy_notifications_command))
         
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$"))
         self.app.add_handler(CallbackQueryHandler(self.monitor_detail_callback, pattern="^monitor_detail_"))
-        self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^full_history_|^enable_deploy_notif_|^disable_deploy_notif_"))
-        self.app.add_handler(CallbackQueryHandler(self.clear_history_callback, pattern="^confirm_clear_all_history|^cancel_clear_history$"))
+        self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^enable_deploy_notif_|^disable_deploy_notif_"))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -167,7 +148,6 @@ class RenderMonitorBot:
 /start - הפעלת הבוט
 /status - בדיקת סטטוס השירותים
 /suspend - השעיית כל השירותים
-/suspend_one [service_id] - השעיית שירות ספציפי
 /resume - החזרת כל השירותים המושעים
 /list_suspended - רשימת שירותים מושעים
 /manage - ניהול שירותים עם כפתורים
@@ -177,8 +157,8 @@ class RenderMonitorBot:
 /unmonitor [service_id] - כיבוי ניטור סטטוס לשירות
 /monitor_manage - ניהול ניטור עם כפתורים
 /list_monitored - רשימת שירותים בניטור סטטוס
-/status_history [service_id] - היסטוריית שינויי סטטוס
 /test_monitor [service_id] [action] - בדיקת התראות
+/clear_test_data - ניקוי נתוני בדיקות
 
 /help - הצגת הודעה זו
         """
@@ -261,32 +241,7 @@ class RenderMonitorBot:
         
         await update.message.reply_text(message, parse_mode='Markdown')
     
-    async def clear_history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """מחיקת היסטוריית סטטוס"""
-        # בדיקת הרשאות (רק אדמין)
-        if str(update.effective_user.id) != config.ADMIN_CHAT_ID:
-            await update.message.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
-            return
-        
-        service_id = context.args[0] if context.args else None
-        
-        if service_id:
-            count = db.clear_status_history(service_id)
-            await update.message.reply_text(f"✅ נמחקו {count} רשומות היסטוריה עבור {service_id}")
-        else:
-            # אישור לפני מחיקת כל ההיסטוריה
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ אישור מחיקה", callback_data="confirm_clear_all_history"),
-                    InlineKeyboardButton("❌ ביטול", callback_data="cancel_clear_history")
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                "⚠️ האם אתה בטוח שברצונך למחוק את כל היסטוריית הסטטוס?",
-                reply_markup=reply_markup
-            )
-    
+
     async def clear_test_data_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מחיקת נתוני בדיקות דמה"""
         # בדיקת הרשאות (רק אדמין)
@@ -295,87 +250,10 @@ class RenderMonitorBot:
             return
         
         count = db.clear_test_data()
-        await update.message.reply_text(f"✅ נמחקו {count} רשומות בדיקה מההיסטוריה\n✅ אופסו סטטוסים של שירותים בבדיקה")
+        await update.message.reply_text(f"✅ נמחקו {count} פעולות בדיקה\n✅ אופסו סטטוסים ונתוני פעילות של שירותים בבדיקה")
     
-    async def toggle_history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """הפעלה/כיבוי של תכונת ההיסטוריה"""
-        # בדיקת הרשאות (רק אדמין)
-        if str(update.effective_user.id) != config.ADMIN_CHAT_ID:
-            await update.message.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
-            return
-        
-        current_state = config.ENABLE_STATUS_HISTORY
-        config.ENABLE_STATUS_HISTORY = not current_state
-        
-        status = "מופעלת" if config.ENABLE_STATUS_HISTORY else "כבויה"
-        await update.message.reply_text(f"✅ תכונת ההיסטוריה כעת {status}")
-    
-    async def toggle_deploy_notifications_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """הפעלה/כיבוי של התראות דיפלוי"""
-        # בדיקת הרשאות (רק אדמין)
-        if str(update.effective_user.id) != config.ADMIN_CHAT_ID:
-            await update.message.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
-            return
-        
-        current_state = config.ENABLE_DEPLOYMENT_NOTIFICATIONS
-        config.ENABLE_DEPLOYMENT_NOTIFICATIONS = not current_state
-        
-        status = "מופעלות" if config.ENABLE_DEPLOYMENT_NOTIFICATIONS else "כבויות"
-        await update.message.reply_text(f"✅ התראות דיפלוי כעת {status}")
-    
-    async def status_history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """הצגת היסטוריית שינויי סטטוס של שירות"""
-        # בדיקה אם ההיסטוריה מופעלת
-        if not config.ENABLE_STATUS_HISTORY:
-            await update.message.reply_text("📵 תכונת ההיסטוריה כבויה כרגע")
-            return
-            
-        if not context.args:
-            await update.message.reply_text("❌ חסר service ID\nשימוש: /status_history [service_id]")
-            return
-        
-        service_id = context.args[0]
-        
-        # קבלת היסטוריה
-        history = db.get_status_history(service_id, limit=10)
-        
-        if not history:
-            await update.message.reply_text(f"📭 אין היסטוריית שינויי סטטוס עבור {service_id}")
-            return
-        
-        # קבלת שם השירות
-        service = db.get_service_activity(service_id)
-        service_name = service.get("service_name", service_id) if service else service_id
-        
-        message = f"📊 *היסטוריית סטטוס - {service_name}*\n\n"
-        
-        for change in history:
-            old_status = change.get("old_status", "unknown")
-            new_status = change.get("new_status", "unknown")
-            timestamp = change.get("timestamp")
-            
-            # אימוג'י לשינוי
-            if new_status == "online":
-                emoji = "🟢"
-            elif new_status == "offline":
-                emoji = "🔴"
-            else:
-                emoji = "🟡"
-            
-            if timestamp:
-                try:
-                    if timestamp.tzinfo is None:
-                        timestamp = timestamp.replace(tzinfo=timezone.utc)
-                    time_str = timestamp.strftime("%d/%m %H:%M")
-                except:
-                    time_str = "לא ידוע"
-            else:
-                time_str = "לא ידוע"
-            
-            message += f"{emoji} {time_str}: {old_status} ➡️ {new_status}\n"
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
+
+
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הצגת מצב כל השירותים"""
         services = db.get_all_services()
@@ -683,19 +561,7 @@ class RenderMonitorBot:
             # ביטול - חזרה לתפריט הניהול
             await self.manage_command(query, context)
     
-    async def clear_history_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """טיפול בכפתורי אישור/ביטול מחיקת היסטוריה"""
-        query = update.callback_query
-        await query.answer()
-        
-        if query.data == "confirm_clear_all_history":
-            # מחיקת כל ההיסטוריה
-            count = db.clear_status_history()
-            await query.edit_message_text(f"✅ נמחקו {count} רשומות היסטוריה")
-        else:
-            # ביטול
-            await query.edit_message_text("❌ המחיקה בוטלה")
-    
+
     async def monitor_detail_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הצגת פרטי שירות וכפתורי ניהול ניטור"""
         query = update.callback_query
@@ -713,9 +579,6 @@ class RenderMonitorBot:
         monitoring_status = status_monitor.get_monitoring_status(service_id)
         is_monitored = monitoring_status.get("enabled", False)
         deploy_notifications = self.db.get_deploy_notification_status(service_id)
-        
-        # קבלת היסטוריה אחרונה
-        history = self.db.get_status_history(service_id, limit=3)
         
         message = f"🤖 *{service_name}*\n"
         message += f"🆔 `{service_id}`\n\n"
@@ -740,26 +603,12 @@ class RenderMonitorBot:
         status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
         message += f"\nסטטוס נוכחי: {status_emoji} {current_status}\n"
         
-        # היסטוריה אחרונה
-        if history:
-            message += "\n📊 *שינויים אחרונים:*\n"
-            for change in history[:3]:
-                old_status = change.get("old_status", "?")
-                new_status = change.get("new_status", "?")
-                timestamp = change.get("timestamp")
-                if timestamp:
-                    time_str = timestamp.strftime("%d/%m %H:%M")
-                    message += f"• {time_str}: {old_status}→{new_status}\n"
-        
         # כפתורים
         keyboard = []
         
         if is_monitored:
             keyboard.append([
                 InlineKeyboardButton("🔕 כבה ניטור", callback_data=f"disable_monitor_{service_id}")
-            ])
-            keyboard.append([
-                InlineKeyboardButton("📜 היסטוריה מלאה", callback_data=f"full_history_{service_id}")
             ])
         else:
             keyboard.append([
@@ -829,11 +678,6 @@ class RenderMonitorBot:
         elif data == "show_monitored_only":
             await query.answer()
             await self.show_monitored_only(query)
-        
-        elif data.startswith("full_history_"):
-            await query.answer()
-            service_id = data.replace("full_history_", "")
-            await self.show_full_history(query, service_id)
 
         elif data.startswith("enable_deploy_notif_"):
             service_id = data.replace("enable_deploy_notif_", "")
@@ -952,40 +796,6 @@ class RenderMonitorBot:
             parse_mode='Markdown'
         )
     
-    async def show_full_history(self, query, service_id: str):
-        """הצגת היסטוריה מלאה"""
-        history = self.db.get_status_history(service_id, limit=20)
-        service = self.db.get_service_activity(service_id)
-        service_name = service.get("service_name", service_id) if service else service_id
-        
-        message = f"📊 *היסטוריית סטטוס - {service_name}*\n\n"
-        
-        if not history:
-            message += "אין היסטוריית שינויים"
-        else:
-            for change in history:
-                old_status = change.get("old_status", "unknown")
-                new_status = change.get("new_status", "unknown")
-                timestamp = change.get("timestamp")
-                
-                emoji = "🟢" if new_status == "online" else "🔴" if new_status == "offline" else "🟡"
-                
-                if timestamp:
-                    time_str = timestamp.strftime("%d/%m %H:%M")
-                    message += f"{emoji} {time_str}: {old_status}→{new_status}\n"
-        
-        keyboard = [[
-            InlineKeyboardButton("🔙 חזור", callback_data=f"monitor_detail_{service_id}")
-        ]]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            message,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-
     async def test_monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת בדיקה לסימולציית שינויי סטטוס"""
         if not context.args:

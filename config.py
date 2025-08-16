@@ -36,9 +36,5 @@ CHECK_INTERVAL_HOURS = 24  # בדיקה כל כמה שעות
 STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("STATUS_CHECK_INTERVAL_SECONDS", "300"))  # 5 minutes default
 STATUS_MONITORING_ENABLED = os.getenv("STATUS_MONITORING_ENABLED", "true").lower() == "true"
 
-# Feature toggles
-ENABLE_STATUS_HISTORY = os.getenv("ENABLE_STATUS_HISTORY", "true").lower() == "true"
-ENABLE_DEPLOYMENT_NOTIFICATIONS = os.getenv("ENABLE_DEPLOYMENT_NOTIFICATIONS", "false").lower() == "true"
-
 # הגדרות כלליות
 TIMEZONE = "Asia/Jerusalem"
