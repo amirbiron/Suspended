@@ -5,6 +5,7 @@ import threading
 import os
 import sys
 import atexit
+import requests
 
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
@@ -138,12 +139,99 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("status_history", self.status_history_command))
         self.app.add_handler(CommandHandler("monitor_manage", self.monitor_manage_command)) # New handler
         self.app.add_handler(CommandHandler("test_monitor", self.test_monitor_command))  # Test command
+        self.app.add_handler(CommandHandler("check_config", self.check_config_command))  # Config check command
         
         self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
         self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$"))
         self.app.add_handler(CallbackQueryHandler(self.monitor_detail_callback, pattern="^monitor_detail_"))
         self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^full_history_"))
+    
+    async def check_config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """בדיקת תקינות הגדרות הבוט"""
+        logger = logging.getLogger(__name__)
+        logger.info("Running configuration check")
+        
+        message = "🔧 *בדיקת הגדרות הבוט*\n\n"
+        
+        # בדיקת TELEGRAM_BOT_TOKEN
+        if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_BOT_TOKEN != "your_telegram_bot_token_here":
+            message += "✅ TELEGRAM_BOT_TOKEN מוגדר\n"
+            # נסיון לקבל מידע על הבוט
+            try:
+                url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/getMe"
+                response = requests.get(url, timeout=5)
+                if response.status_code == 200:
+                    bot_info = response.json().get('result', {})
+                    bot_name = bot_info.get('username', 'Unknown')
+                    message += f"   └─ בוט: @{bot_name}\n"
+                else:
+                    message += "   └─ ⚠️ הטוקן לא תקין\n"
+            except:
+                message += "   └─ ⚠️ לא ניתן לאמת את הטוקן\n"
+        else:
+            message += "❌ TELEGRAM_BOT_TOKEN לא מוגדר\n"
+        
+        # בדיקת ADMIN_CHAT_ID
+        if config.ADMIN_CHAT_ID and config.ADMIN_CHAT_ID != "your_admin_chat_id_here":
+            message += f"✅ ADMIN_CHAT_ID מוגדר: `{config.ADMIN_CHAT_ID}`\n"
+            
+            # נסיון לשלוח הודעת בדיקה
+            if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_BOT_TOKEN != "your_telegram_bot_token_here":
+                from notifications import send_notification
+                test_result = send_notification("🔔 הודעת בדיקה - הגדרות תקינות!")
+                if test_result:
+                    message += "   └─ ✅ הודעת בדיקה נשלחה בהצלחה\n"
+                else:
+                    message += "   └─ ❌ נכשל בשליחת הודעת בדיקה\n"
+        else:
+            message += "❌ ADMIN_CHAT_ID לא מוגדר\n"
+            message += "   └─ 💡 השתמש ב-/start בצ'אט פרטי עם הבוט כדי לקבל את ה-Chat ID שלך\n"
+        
+        # בדיקת RENDER_API_KEY
+        if config.RENDER_API_KEY and config.RENDER_API_KEY != "your_render_api_key_here":
+            message += "✅ RENDER_API_KEY מוגדר\n"
+            # נסיון להתחבר ל-Render API
+            try:
+                from render_api import render_api
+                services = render_api.get_all_services()
+                if services is not None:
+                    message += f"   └─ ✅ חיבור ל-Render API תקין ({len(services)} שירותים)\n"
+                else:
+                    message += "   └─ ❌ לא ניתן להתחבר ל-Render API\n"
+            except Exception as e:
+                message += f"   └─ ❌ שגיאה בחיבור ל-Render API: {str(e)}\n"
+        else:
+            message += "❌ RENDER_API_KEY לא מוגדר\n"
+        
+        # בדיקת MongoDB
+        message += "\n*מסד נתונים:*\n"
+        try:
+            service_count = self.db.services.count_documents({})
+            monitored_count = self.db.services.count_documents({"status_monitoring.enabled": True})
+            message += f"✅ MongoDB מחובר\n"
+            message += f"   ├─ שירותים במערכת: {service_count}\n"
+            message += f"   └─ שירותים בניטור: {monitored_count}\n"
+        except Exception as e:
+            message += f"❌ בעיה בחיבור ל-MongoDB: {str(e)}\n"
+        
+        # בדיקת ניטור סטטוס
+        message += "\n*ניטור סטטוס:*\n"
+        if status_monitor.monitoring_thread and status_monitor.monitoring_thread.is_alive():
+            message += "✅ שרשור ניטור פעיל\n"
+            message += f"   └─ בודק כל {config.STATUS_CHECK_INTERVAL_SECONDS} שניות\n"
+        else:
+            message += "❌ שרשור ניטור לא פעיל\n"
+        
+        # הצגת Chat ID של המשתמש הנוכחי
+        user_chat_id = str(update.effective_chat.id)
+        message += f"\n📝 *ה-Chat ID שלך:* `{user_chat_id}`\n"
+        
+        if user_chat_id != config.ADMIN_CHAT_ID:
+            message += "⚠️ שים לב: ה-Chat ID שלך שונה מה-ADMIN_CHAT_ID המוגדר\n"
+            message += "כדי לקבל התראות, עדכן את ADMIN_CHAT_ID למספר הזה\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -168,10 +256,13 @@ class RenderMonitorBot:
 *פקודות ניטור סטטוס:*
 /monitor [service_id] - הפעלת ניטור סטטוס לשירות
 /unmonitor [service_id] - כיבוי ניטור סטטוס לשירות
+/list_monitored - רשימת שירותים בניטור
 /monitor_manage - ניהול ניטור עם כפתורים
-/list_monitored - רשימת שירותים בניטור סטטוס
-/status_history [service_id] - היסטוריית שינויי סטטוס
 /test_monitor [service_id] [action] - בדיקת התראות
+
+*פקודות אבחון:*
+/check_config - בדיקת הגדרות הבוט והתראות
+/status_history [service_id] - היסטוריית שינויי סטטוס
 
 /help - הצגת הודעה זו
         """
@@ -942,33 +1033,81 @@ class RenderMonitorBot:
         service_id = context.args[0]
         action = context.args[1] if len(context.args) > 1 else "cycle"
         
+        # לוג של הפעולה
+        logger = logging.getLogger(__name__)
+        logger.info(f"test_monitor_command called with service_id={service_id}, action={action}")
+        
         # בדיקה אם השירות קיים
         service = self.db.get_service_activity(service_id)
         if not service:
-            await update.message.reply_text(f"❌ שירות {service_id} לא נמצא במערכת")
-            return
+            # נסיון ליצור רשומה בסיסית לשירות לצורך הבדיקה
+            logger.warning(f"Service {service_id} not found in database, creating temporary entry for testing")
+            await update.message.reply_text(
+                f"⚠️ שירות {service_id} לא נמצא במערכת.\n"
+                f"יוצר רשומה זמנית לצורך הבדיקה..."
+            )
+            
+            # יצירת רשומה זמנית
+            self.db.services.insert_one({
+                "_id": service_id,
+                "service_name": f"Test Service {service_id[:8]}",
+                "status": "active",
+                "last_known_status": "unknown",
+                "created_at": datetime.now(timezone.utc),
+                "is_test": True  # סימון שזו רשומה לבדיקה
+            })
+            
+            service = self.db.get_service_activity(service_id)
+            if not service:
+                await update.message.reply_text(f"❌ לא הצלחתי ליצור רשומה זמנית עבור {service_id}")
+                return
         
         service_name = service.get("service_name", service_id)
         
         # בדיקה אם הניטור מופעל
         monitoring_status = status_monitor.get_monitoring_status(service_id)
         if not monitoring_status.get("enabled", False):
+            # הפעלת ניטור אוטומטית לצורך הבדיקה
+            logger.info(f"Monitoring not enabled for {service_id}, enabling it for test")
             await update.message.reply_text(
                 f"⚠️ ניטור לא מופעל עבור {service_name}\n"
-                f"הפעל ניטור תחילה עם: `/monitor {service_id}`",
+                f"מפעיל ניטור אוטומטית לצורך הבדיקה..."
+            )
+            
+            user_id = update.effective_user.id
+            if not status_monitor.enable_monitoring(service_id, user_id):
+                await update.message.reply_text(f"❌ לא הצלחתי להפעיל ניטור עבור {service_id}")
+                return
+            
+            await asyncio.sleep(1)  # המתנה קצרה להפעלת הניטור
+        
+        # בדיקת הגדרות התראות
+        if not config.ADMIN_CHAT_ID or config.ADMIN_CHAT_ID == "your_admin_chat_id_here":
+            await update.message.reply_text(
+                "⚠️ *אזהרה: ADMIN_CHAT_ID לא מוגדר!*\n"
+                "התראות לא יישלחו ללא הגדרה זו.\n"
+                "הגדר את ADMIN_CHAT_ID במשתני הסביבה.",
                 parse_mode='Markdown'
             )
-            return
+            logger.error("ADMIN_CHAT_ID not configured properly")
         
         # קבלת הסטטוס הנוכחי
         current_status = service.get("last_known_status", "unknown")
         
-        await update.message.reply_text(f"🧪 מתחיל בדיקה עבור {service_name}...")
+        await update.message.reply_text(
+            f"🧪 מתחיל בדיקה עבור {service_name}...\n"
+            f"📊 סטטוס נוכחי: {current_status}\n"
+            f"🎯 פעולה: {action}"
+        )
+        
+        # לוג לפני ביצוע הסימולציה
+        logger.info(f"Starting simulation for {service_id}: current_status={current_status}, action={action}")
         
         if action == "online":
             # סימולציה של עלייה
             if current_status == "online":
                 # אם כבר online, קודם נוריד ואז נעלה
+                logger.info(f"Service {service_id} already online, simulating down then up")
                 await self._simulate_status_change(service_id, "online", "offline")
                 await asyncio.sleep(2)
                 await self._simulate_status_change(service_id, "offline", "online")
@@ -979,6 +1118,7 @@ class RenderMonitorBot:
                     "🔔 אם הניטור פעיל, אמורת לקבל 2 התראות"
                 )
             else:
+                logger.info(f"Simulating service {service_id} going online")
                 await self._simulate_status_change(service_id, current_status, "online")
                 await update.message.reply_text(
                     "✅ סימולציה הושלמה:\n"
@@ -990,6 +1130,7 @@ class RenderMonitorBot:
             # סימולציה של ירידה
             if current_status == "offline":
                 # אם כבר offline, קודם נעלה ואז נוריד
+                logger.info(f"Service {service_id} already offline, simulating up then down")
                 await self._simulate_status_change(service_id, "offline", "online")
                 await asyncio.sleep(2)
                 await self._simulate_status_change(service_id, "online", "offline")
@@ -1000,6 +1141,7 @@ class RenderMonitorBot:
                     "🔔 אם הניטור פעיל, אמורת לקבל 2 התראות"
                 )
             else:
+                logger.info(f"Simulating service {service_id} going offline")
                 await self._simulate_status_change(service_id, current_status, "offline")
                 await update.message.reply_text(
                     "✅ סימולציה הושלמה:\n"
@@ -1015,6 +1157,7 @@ class RenderMonitorBot:
             message = "🔄 מבצע מחזור בדיקה מלא...\n\n"
             
             for i, new_status in enumerate(statuses, 1):
+                logger.info(f"Cycle step {i}: {previous} -> {new_status}")
                 await self._simulate_status_change(service_id, previous, new_status)
                 message += f"{i}️⃣ {previous} ➡️ {new_status}\n"
                 previous = new_status
@@ -1032,6 +1175,9 @@ class RenderMonitorBot:
     
     async def _simulate_status_change(self, service_id: str, old_status: str, new_status: str):
         """סימולציה של שינוי סטטוס"""
+        logger = logging.getLogger(__name__)
+        logger.info(f"Simulating status change for {service_id}: {old_status} -> {new_status}")
+        
         # עדכון הסטטוס במסד הנתונים
         self.db.update_service_status(service_id, new_status)
         self.db.record_status_change(service_id, old_status, new_status)
@@ -1042,6 +1188,8 @@ class RenderMonitorBot:
         
         # שליחת התראה אם השינוי משמעותי
         if status_monitor._is_significant_change(old_status, new_status):
+            logger.info(f"Significant change detected for {service_id}, sending notification")
+            
             # יצירת אימוג'י מתאים
             if new_status == "online":
                 emoji = "🟢"
@@ -1069,7 +1217,14 @@ class RenderMonitorBot:
             elif new_status == "offline":
                 test_message += "⚠️ השירות ירד ואינו זמין"
                 
-            send_notification(test_message)
+            # שליחת ההתראה עם בדיקת תוצאה
+            result = send_notification(test_message)
+            if result:
+                logger.info(f"Test notification sent successfully for {service_id}")
+            else:
+                logger.error(f"Failed to send test notification for {service_id}")
+        else:
+            logger.info(f"Change from {old_status} to {new_status} is not significant, no notification sent")
 
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
