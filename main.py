@@ -18,6 +18,7 @@ from database import db
 from render_api import render_api, RenderAPI
 from activity_tracker import activity_tracker
 from notifications import send_notification, send_startup_notification, send_daily_report
+from status_monitor import status_monitor  # New import
 
 import logging
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
@@ -82,6 +83,42 @@ class RenderMonitorBot:
         self.db = db
         self.render_api = render_api
         self.setup_handlers()
+        self.setup_bot_commands()  # Add bot commands setup
+        
+    def setup_bot_commands(self):
+        """הגדרת תפריט הפקודות בטלגרם"""
+        from telegram import BotCommand
+        
+        commands = [
+            BotCommand("start", "🚀 הפעלת הבוט"),
+            BotCommand("status", "📊 סטטוס כל השירותים"),
+            BotCommand("manage", "🎛️ ניהול שירותים"),
+            BotCommand("monitor_manage", "👁️ ניהול ניטור סטטוס"),
+            BotCommand("suspend", "⏸️ השעיית כל השירותים"),
+            BotCommand("resume", "▶️ החזרת שירותים מושעים"),
+            BotCommand("list_suspended", "📋 רשימת מושעים"),
+            BotCommand("list_monitored", "👁️ רשימת מנוטרים"),
+            BotCommand("test_monitor", "🧪 בדיקת התראות ניטור"),
+            BotCommand("help", "❓ עזרה"),
+        ]
+        
+        # Set the commands asynchronously
+        async def set_commands():
+            await self.app.bot.set_my_commands(commands)
+            print("✅ תפריט פקודות הוגדר בהצלחה")
+        
+        # Run the async function
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If loop is already running, create a task
+                asyncio.create_task(set_commands())
+            else:
+                # If loop is not running, run until complete
+                loop.run_until_complete(set_commands())
+        except Exception as e:
+            print(f"⚠️ לא הצלחתי להגדיר תפריט פקודות: {e}")
         
     def setup_handlers(self):
         """הוספת command handlers"""
@@ -93,9 +130,20 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("suspend_one", self.suspend_one_command))
         self.app.add_handler(CommandHandler("manage", self.manage_command))
-        self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_"))
+        
+        # New status monitoring commands
+        self.app.add_handler(CommandHandler("monitor", self.monitor_command))
+        self.app.add_handler(CommandHandler("unmonitor", self.unmonitor_command))
+        self.app.add_handler(CommandHandler("list_monitored", self.list_monitored_command))
+        self.app.add_handler(CommandHandler("status_history", self.status_history_command))
+        self.app.add_handler(CommandHandler("monitor_manage", self.monitor_manage_command)) # New handler
+        self.app.add_handler(CommandHandler("test_monitor", self.test_monitor_command))  # Test command
+        
+        self.app.add_handler(CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$"))
         self.app.add_handler(CallbackQueryHandler(self.service_action_callback, pattern="^suspend_|^resume_|^back_to_manage$"))
-        self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|cancel_suspend$"))
+        self.app.add_handler(CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$"))
+        self.app.add_handler(CallbackQueryHandler(self.monitor_detail_callback, pattern="^monitor_detail_"))
+        self.app.add_handler(CallbackQueryHandler(self.monitor_action_callback, pattern="^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_monitor_manage|^show_monitored_only|^full_history_"))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -105,16 +153,154 @@ class RenderMonitorBot:
         await update.message.reply_text(message)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """רשימת פקודות מעודכנת"""
-        message = "📋 <b>רשימת פקודות:</b>\n\n"
-        message += "/start - התחלה\n"
-        message += "/status - הצגת כל השירותים\n"
-        message += "/manage - ניהול שירותים (השעיה/הפעלה עם כפתורים)\n"
-        message += "/suspend - השעיית כל השירותים (עם אישור)\n"
-        message += "/resume - החזרת כל השירותים המושעים\n"
-        message += "/list_suspended - רשימת שירותים מושעים\n"
-        message += "/help - עזרה\n"
-        await update.message.reply_text(message, parse_mode="HTML")
+        """הצגת עזרה"""
+        help_text = """
+📚 *רשימת פקודות:*
+
+/start - הפעלת הבוט
+/status - בדיקת סטטוס השירותים
+/suspend - השעיית כל השירותים
+/suspend_one [service_id] - השעיית שירות ספציפי
+/resume - החזרת כל השירותים המושעים
+/list_suspended - רשימת שירותים מושעים
+/manage - ניהול שירותים עם כפתורים
+
+*פקודות ניטור סטטוס:*
+/monitor [service_id] - הפעלת ניטור סטטוס לשירות
+/unmonitor [service_id] - כיבוי ניטור סטטוס לשירות
+/monitor_manage - ניהול ניטור עם כפתורים
+/list_monitored - רשימת שירותים בניטור סטטוס
+/status_history [service_id] - היסטוריית שינויי סטטוס
+/test_monitor [service_id] [action] - בדיקת התראות
+
+/help - הצגת הודעה זו
+        """
+        await update.message.reply_text(help_text, parse_mode='Markdown')
+    
+    async def monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הפעלת ניטור סטטוס לשירות"""
+        if not context.args:
+            await update.message.reply_text("❌ חסר service ID\nשימוש: /monitor [service_id]")
+            return
+        
+        service_id = context.args[0]
+        user_id = update.effective_user.id
+        
+        # הפעלת הניטור
+        if status_monitor.enable_monitoring(service_id, user_id):
+            await update.message.reply_text(
+                f"✅ ניטור סטטוס הופעל עבור השירות {service_id}\n"
+                f"תקבל התראות כשהשירות יעלה או ירד."
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ לא הצלחתי להפעיל ניטור עבור {service_id}\n"
+                f"ודא שה-ID נכון ושהשירות קיים ב-Render."
+            )
+    
+    async def unmonitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """כיבוי ניטור סטטוס לשירות"""
+        if not context.args:
+            await update.message.reply_text("❌ חסר service ID\nשימוש: /unmonitor [service_id]")
+            return
+        
+        service_id = context.args[0]
+        user_id = update.effective_user.id
+        
+        # כיבוי הניטור
+        if status_monitor.disable_monitoring(service_id, user_id):
+            await update.message.reply_text(
+                f"✅ ניטור סטטוס כובה עבור השירות {service_id}"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ לא הצלחתי לכבות ניטור עבור {service_id}"
+            )
+    
+    async def list_monitored_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הצגת רשימת שירותים בניטור סטטוס"""
+        monitored_services = status_monitor.get_all_monitored_services()
+        
+        if not monitored_services:
+            await update.message.reply_text("📭 אין שירותים בניטור סטטוס כרגע")
+            return
+        
+        message = "👁️ *שירותים בניטור סטטוס:*\n\n"
+        
+        for service in monitored_services:
+            service_id = service["_id"]
+            service_name = service.get("service_name", service_id)
+            last_status = service.get("last_known_status", "unknown")
+            monitoring_info = service.get("status_monitoring", {})
+            enabled_at = monitoring_info.get("enabled_at")
+            
+            # אימוג'י לפי סטטוס
+            status_emoji = "🟢" if last_status == "online" else "🔴" if last_status == "offline" else "🟡"
+            
+            message += f"{status_emoji} *{service_name}*\n"
+            message += f"   ID: `{service_id}`\n"
+            message += f"   סטטוס: {last_status}\n"
+            
+            if enabled_at:
+                try:
+                    if enabled_at.tzinfo is None:
+                        enabled_at = enabled_at.replace(tzinfo=timezone.utc)
+                    days_monitored = (datetime.now(timezone.utc) - enabled_at).days
+                    message += f"   בניטור: {days_monitored} ימים\n"
+                except:
+                    pass
+            
+            message += "\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    async def status_history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הצגת היסטוריית שינויי סטטוס של שירות"""
+        if not context.args:
+            await update.message.reply_text("❌ חסר service ID\nשימוש: /status_history [service_id]")
+            return
+        
+        service_id = context.args[0]
+        
+        # קבלת היסטוריה
+        history = db.get_status_history(service_id, limit=10)
+        
+        if not history:
+            await update.message.reply_text(f"📭 אין היסטוריית שינויי סטטוס עבור {service_id}")
+            return
+        
+        # קבלת שם השירות
+        service = db.get_service_activity(service_id)
+        service_name = service.get("service_name", service_id) if service else service_id
+        
+        message = f"📊 *היסטוריית סטטוס - {service_name}*\n\n"
+        
+        for change in history:
+            old_status = change.get("old_status", "unknown")
+            new_status = change.get("new_status", "unknown")
+            timestamp = change.get("timestamp")
+            
+            # אימוג'י לשינוי
+            if new_status == "online":
+                emoji = "🟢"
+            elif new_status == "offline":
+                emoji = "🔴"
+            else:
+                emoji = "🟡"
+            
+            if timestamp:
+                try:
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.replace(tzinfo=timezone.utc)
+                    time_str = timestamp.strftime("%d/%m %H:%M")
+                except:
+                    time_str = "לא ידוע"
+            else:
+                time_str = "לא ידוע"
+            
+            message += f"{emoji} {time_str}: {old_status} ➡️ {new_status}\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הצגת מצב כל השירותים"""
@@ -171,14 +357,17 @@ class RenderMonitorBot:
         )
     
     async def suspend_one_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """השעיית שירות ספציפי לפי ID"""
+        """השעיית שירות ספציפי"""
         if not context.args:
-            await update.message.reply_text("יש לציין ID של שירות. לדוגמה: /suspend_one srv-12345")
+            await update.message.reply_text("❌ חסר service ID\nשימוש: /suspend_one [service_id]")
             return
-
+        
         service_id = context.args[0]
+        
+        # סימון פעולה ידנית במנטר הסטטוס
+        status_monitor.mark_manual_action(service_id)
+        
         try:
-            print(f"Attempting to suspend service with ID: {service_id}")
             self.render_api.suspend_service(service_id)
             self.db.update_service_activity(service_id, status="suspended")
             self.db.increment_suspend_count(service_id)
@@ -238,70 +427,159 @@ class RenderMonitorBot:
         await update.message.reply_text(message, parse_mode="Markdown")
 
     async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """מציג תפריט ניהול עם כפתורים לכל שירות"""
+        """ניהול שירותים עם כפתורים אינטראקטיביים"""
         services = self.db.get_all_services()
+        
         if not services:
-            await update.message.reply_text("לא נמצאו שירותים לניהול.")
+            await update.message.reply_text("📭 אין שירותים במערכת")
             return
-
+        
         keyboard = []
+        
+        # כפתור לניהול ניטור סטטוס
+        keyboard.append([
+            InlineKeyboardButton("👁️ ניהול ניטור סטטוס", callback_data="go_to_monitor_manage")
+        ])
+        
+        # רשימת שירותים
         for service in services:
-            service_name = service.get("service_name", service['_id'])
-            # כל כפתור שולח callback עם קידומת ושם השירות
-            callback_data = f"manage_{service['_id']}"
-            keyboard.append([InlineKeyboardButton(service_name, callback_data=callback_data)])
-
+            service_id = service["_id"]
+            service_name = service.get("service_name", service_id)
+            status = service.get("status", "active")
+            
+            # אימוג'י לפי סטטוס
+            if status == "suspended":
+                emoji = "🔴"
+            else:
+                emoji = "🟢"
+            
+            # שם מקוצר אם ארוך מדי
+            display_name = service_name[:25] + "..." if len(service_name) > 25 else service_name
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{emoji} {display_name}",
+                    callback_data=f"manage_{service_id}"
+                )
+            ])
+        
+        # כפתור השעיה כללית
+        keyboard.append([
+            InlineKeyboardButton("⏸️ השעה הכל", callback_data="suspend_all")
+        ])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("בחר שירות לניהול:", reply_markup=reply_markup)
+        
+        message = "🎛️ *ניהול שירותים*\n\n"
+        message += "🟢 = פעיל | 🔴 = מושעה\n\n"
+        message += "בחר שירות לניהול או פעולה כללית:"
+        
+        if isinstance(update, Update):
+            await update.message.reply_text(
+                message,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            # אם זה callback query
+            await update.edit_message_text(
+                message,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
 
     async def manage_service_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מציג אפשרויות ניהול לשירות שנבחר"""
         query = update.callback_query
         await query.answer()
-
-        # מחלצים את ה-ID מה-callback_data
-        service_id = query.data.split('_')[1]
+        
+        # Handle navigation to monitor management
+        if query.data == "go_to_monitor_manage":
+            # Call monitor_manage as if it was called directly
+            await self.refresh_monitor_manage(query)
+            return
+        
+        # Handle suspend all
+        if query.data == "suspend_all":
+            keyboard = [
+                [InlineKeyboardButton("✅ אישור", callback_data="confirm_suspend_all")],
+                [InlineKeyboardButton("❌ ביטול", callback_data="cancel_suspend")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                "⚠️ האם אתה בטוח שברצונך להשעות את כל השירותים?",
+                reply_markup=reply_markup
+            )
+            return
+        
+        # Extract service_id from callback data
+        service_id = query.data.replace("manage_", "")
         service = self.db.get_service_activity(service_id)
-        service_name = service.get("service_name", service_id) if service else service_id
-        status = service.get("status", "unknown") if service else "unknown"
-
-        # כפתורים להשעיה או הפעלה מחדש
-        keyboard = [
-            [
-                InlineKeyboardButton("🔴 השהה", callback_data=f"suspend_{service_id}"),
-                InlineKeyboardButton("🟢 הפעל מחדש", callback_data=f"resume_{service_id}")
-            ],
-            [InlineKeyboardButton("« חזור לרשימה", callback_data="back_to_manage")]
-        ]
+        
+        if not service:
+            await query.edit_message_text("❌ שירות לא נמצא")
+            return
+        
+        service_name = service.get("service_name", service_id)
+        status = service.get("status", "active")
+        
+        # בניית תפריט לשירות
+        keyboard = []
+        
+        if status == "suspended":
+            keyboard.append([InlineKeyboardButton("▶️ הפעל מחדש", callback_data=f"resume_{service_id}")])
+        else:
+            keyboard.append([InlineKeyboardButton("⏸️ השעה", callback_data=f"suspend_{service_id}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 חזור", callback_data="back_to_manage")])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message = f"🤖 *{service_name}*\n"
+        message += f"🆔 `{service_id}`\n"
+        message += f"📊 סטטוס: {'🔴 מושעה' if status == 'suspended' else '🟢 פעיל'}\n\n"
+        message += "בחר פעולה:"
+        
         await query.edit_message_text(
-            text=f"ניהול שירות: <b>{service_name}</b>\nסטטוס נוכחי: {status}",
+            message,
             reply_markup=reply_markup,
-            parse_mode="HTML"
+            parse_mode='Markdown'
         )
 
     async def service_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """מבצע פעולת השעיה או הפעלה על שירות"""
+        """מטפל בלחיצה על כפתורי השעיה/הפעלה של שירות"""
         query = update.callback_query
         await query.answer()
-
-        action, service_id = query.data.split('_')[0], '_'.join(query.data.split('_')[1:])
-
-        if action == "suspend":
+        
+        data = query.data
+        
+        if data.startswith("suspend_"):
+            service_id = data.replace("suspend_", "")
+            
+            # סימון פעולה ידנית במנטר הסטטוס
+            status_monitor.mark_manual_action(service_id)
+            
             try:
                 self.render_api.suspend_service(service_id)
                 self.db.update_service_activity(service_id, status="suspended")
-                await query.edit_message_text(text=f"✅ השירות {service_id} הושהה בהצלחה.")
+                self.db.increment_suspend_count(service_id)
+                await query.edit_message_text(text=f"✅ השירות {service_id} הושהה.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהשעיית {service_id}: {e}")
-        elif action == "resume":
+        
+        elif data.startswith("resume_"):
+            service_id = data.replace("resume_", "")
+            
+            # סימון פעולה ידנית במנטר הסטטוס
+            status_monitor.mark_manual_action(service_id)
+            
             try:
                 self.render_api.resume_service(service_id)
                 self.db.update_service_activity(service_id, status="active")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
-        elif action == "back":  # מטפל בכפתור "חזור"
+        elif data == "back_to_manage":  # מטפל בכפתור "חזור"
             # קורא מחדש לפונקציה המקורית כדי להציג את הרשימה
             await self.manage_command(update.callback_query, context)
 
@@ -317,9 +595,13 @@ class RenderMonitorBot:
             for service in services:
                 if service.get("status") != "suspended":
                     try:
-                        self.render_api.suspend_service(service['_id'])
-                        self.db.update_service_activity(service['_id'], status="suspended")
-                        self.db.increment_suspend_count(service['_id'])
+                        service_id = service['_id']
+                        # סימון פעולה ידנית במנטר הסטטוס
+                        status_monitor.mark_manual_action(service_id)
+                        
+                        self.render_api.suspend_service(service_id)
+                        self.db.update_service_activity(service_id, status="suspended")
+                        self.db.increment_suspend_count(service_id)
                         suspended_count += 1
                     except Exception as e:
                         print(f"Could not suspend service {service['_id']}: {e}")
@@ -328,6 +610,466 @@ class RenderMonitorBot:
 
         elif query.data == "cancel_suspend":
             await query.edit_message_text(text="הפעולה בוטלה.")
+
+    async def monitor_manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """ניהול ניטור סטטוס עם כפתורים אינטראקטיביים"""
+        # קבלת רשימת השירותים
+        services = self.db.get_all_services()
+        
+        if not services:
+            await update.message.reply_text("📭 אין שירותים במערכת")
+            return
+        
+        # יצירת כפתורים
+        keyboard = []
+        
+        for service in services:
+            service_id = service["_id"]
+            service_name = service.get("service_name", service_id)
+            
+            # בדיקה אם הניטור מופעל
+            monitoring_status = status_monitor.get_monitoring_status(service_id)
+            is_monitored = monitoring_status.get("enabled", False)
+            
+            # סטטוס נוכחי
+            current_status = service.get("last_known_status", "unknown")
+            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            
+            # אימוג'י ניטור
+            monitor_emoji = "👁️" if is_monitored else "👁️‍🗨️"
+            
+            # טקסט הכפתור
+            button_text = f"{status_emoji} {monitor_emoji} {service_name[:20]}"
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    button_text,
+                    callback_data=f"monitor_detail_{service_id}"
+                )
+            ])
+        
+        # כפתור לרשימת המנוטרים
+        keyboard.append([
+            InlineKeyboardButton("📊 הצג רק מנוטרים", callback_data="show_monitored_only")
+        ])
+        
+        # כפתור רענון
+        keyboard.append([
+            InlineKeyboardButton("🔄 רענן", callback_data="refresh_monitor_manage")
+        ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message = "🎛️ *ניהול ניטור סטטוס*\n\n"
+        message += "👁️ = בניטור | 👁️‍🗨️ = לא בניטור\n"
+        message += "🟢 = פעיל | 🔴 = כבוי | 🟡 = לא ידוע\n\n"
+        message += "בחר שירות לניהול:"
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def monitor_detail_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הצגת פרטי שירות וכפתורי ניהול ניטור"""
+        query = update.callback_query
+        await query.answer()
+        
+        service_id = query.data.replace("monitor_detail_", "")
+        
+        # קבלת מידע על השירות
+        service = self.db.get_service_activity(service_id)
+        if not service:
+            await query.edit_message_text("❌ שירות לא נמצא")
+            return
+        
+        service_name = service.get("service_name", service_id)
+        monitoring_status = status_monitor.get_monitoring_status(service_id)
+        is_monitored = monitoring_status.get("enabled", False)
+        
+        # קבלת היסטוריה אחרונה
+        history = self.db.get_status_history(service_id, limit=3)
+        
+        message = f"🤖 *{service_name}*\n"
+        message += f"🆔 `{service_id}`\n\n"
+        
+        # סטטוס ניטור
+        if is_monitored:
+            message += "✅ *ניטור פעיל*\n"
+            enabled_at = monitoring_status.get("enabled_at")
+            if enabled_at:
+                message += f"מנוטר מאז: {enabled_at.strftime('%d/%m/%Y')}\n"
+        else:
+            message += "❌ *ניטור כבוי*\n"
+        
+        # סטטוס נוכחי
+        current_status = service.get("last_known_status", "unknown")
+        status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+        message += f"\nסטטוס נוכחי: {status_emoji} {current_status}\n"
+        
+        # היסטוריה אחרונה
+        if history:
+            message += "\n📊 *שינויים אחרונים:*\n"
+            for change in history[:3]:
+                old_status = change.get("old_status", "?")
+                new_status = change.get("new_status", "?")
+                timestamp = change.get("timestamp")
+                if timestamp:
+                    time_str = timestamp.strftime("%d/%m %H:%M")
+                    message += f"• {time_str}: {old_status}→{new_status}\n"
+        
+        # כפתורים
+        keyboard = []
+        
+        if is_monitored:
+            keyboard.append([
+                InlineKeyboardButton("🔕 כבה ניטור", callback_data=f"disable_monitor_{service_id}")
+            ])
+            keyboard.append([
+                InlineKeyboardButton("📜 היסטוריה מלאה", callback_data=f"full_history_{service_id}")
+            ])
+        else:
+            keyboard.append([
+                InlineKeyboardButton("🔔 הפעל ניטור", callback_data=f"enable_monitor_{service_id}")
+            ])
+        
+        keyboard.append([
+            InlineKeyboardButton("🔙 חזור לרשימה", callback_data="back_to_monitor_list")
+        ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def monitor_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """טיפול בפעולות ניטור"""
+        query = update.callback_query
+        await query.answer()
+        
+        data = query.data
+        user_id = query.from_user.id
+        
+        if data.startswith("enable_monitor_"):
+            service_id = data.replace("enable_monitor_", "")
+            
+            if status_monitor.enable_monitoring(service_id, user_id):
+                await query.answer("✅ ניטור הופעל", show_alert=True)
+                # רענון התצוגה
+                query.data = f"monitor_detail_{service_id}"
+                await self.monitor_detail_callback(update, context)
+            else:
+                await query.answer("❌ שגיאה בהפעלת ניטור", show_alert=True)
+        
+        elif data.startswith("disable_monitor_"):
+            service_id = data.replace("disable_monitor_", "")
+            
+            if status_monitor.disable_monitoring(service_id, user_id):
+                await query.answer("✅ ניטור כובה", show_alert=True)
+                # רענון התצוגה
+                query.data = f"monitor_detail_{service_id}"
+                await self.monitor_detail_callback(update, context)
+            else:
+                await query.answer("❌ שגיאה בכיבוי ניטור", show_alert=True)
+        
+        elif data == "back_to_monitor_list":
+            # חזרה לרשימה הראשית
+            await self.refresh_monitor_manage(query)
+        
+        elif data == "refresh_monitor_manage":
+            await self.refresh_monitor_manage(query)
+        
+        elif data == "show_monitored_only":
+            await self.show_monitored_only(query)
+        
+        elif data.startswith("full_history_"):
+            service_id = data.replace("full_history_", "")
+            await self.show_full_history(query, service_id)
+    
+    async def refresh_monitor_manage(self, query):
+        """רענון רשימת הניטור"""
+        # קבלת רשימת השירותים
+        services = self.db.get_all_services()
+        
+        if not services:
+            await query.edit_message_text("📭 אין שירותים במערכת")
+            return
+        
+        # יצירת כפתורים
+        keyboard = []
+        
+        for service in services:
+            service_id = service["_id"]
+            service_name = service.get("service_name", service_id)
+            
+            # בדיקה אם הניטור מופעל
+            monitoring_status = status_monitor.get_monitoring_status(service_id)
+            is_monitored = monitoring_status.get("enabled", False)
+            
+            # סטטוס נוכחי
+            current_status = service.get("last_known_status", "unknown")
+            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            
+            # אימוג'י ניטור
+            monitor_emoji = "👁️" if is_monitored else "👁️‍🗨️"
+            
+            # טקסט הכפתור
+            button_text = f"{status_emoji} {monitor_emoji} {service_name[:20]}"
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    button_text,
+                    callback_data=f"monitor_detail_{service_id}"
+                )
+            ])
+        
+        # כפתור לרשימת המנוטרים
+        keyboard.append([
+            InlineKeyboardButton("📊 הצג רק מנוטרים", callback_data="show_monitored_only")
+        ])
+        
+        # כפתור רענון
+        keyboard.append([
+            InlineKeyboardButton("🔄 רענן", callback_data="refresh_monitor_manage")
+        ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message = "🎛️ *ניהול ניטור סטטוס*\n\n"
+        message += "👁️ = בניטור | 👁️‍🗨️ = לא בניטור\n"
+        message += "🟢 = פעיל | 🔴 = כבוי | 🟡 = לא ידוע\n\n"
+        message += "בחר שירות לניהול:"
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def show_monitored_only(self, query):
+        """הצגת רק שירותים מנוטרים"""
+        monitored_services = status_monitor.get_all_monitored_services()
+        
+        if not monitored_services:
+            await query.answer("אין שירותים בניטור", show_alert=True)
+            return
+        
+        keyboard = []
+        
+        for service in monitored_services:
+            service_id = service["_id"]
+            service_name = service.get("service_name", service_id)
+            current_status = service.get("last_known_status", "unknown")
+            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            
+            button_text = f"{status_emoji} 👁️ {service_name[:20]}"
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    button_text,
+                    callback_data=f"monitor_detail_{service_id}"
+                )
+            ])
+        
+        keyboard.append([
+            InlineKeyboardButton("🔙 הצג הכל", callback_data="refresh_monitor_manage")
+        ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message = "👁️ *שירותים בניטור פעיל*\n\n"
+        message += f"סה\"כ {len(monitored_services)} שירותים בניטור\n\n"
+        message += "בחר שירות לניהול:"
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def show_full_history(self, query, service_id: str):
+        """הצגת היסטוריה מלאה"""
+        history = self.db.get_status_history(service_id, limit=20)
+        service = self.db.get_service_activity(service_id)
+        service_name = service.get("service_name", service_id) if service else service_id
+        
+        message = f"📊 *היסטוריית סטטוס - {service_name}*\n\n"
+        
+        if not history:
+            message += "אין היסטוריית שינויים"
+        else:
+            for change in history:
+                old_status = change.get("old_status", "unknown")
+                new_status = change.get("new_status", "unknown")
+                timestamp = change.get("timestamp")
+                
+                emoji = "🟢" if new_status == "online" else "🔴" if new_status == "offline" else "🟡"
+                
+                if timestamp:
+                    time_str = timestamp.strftime("%d/%m %H:%M")
+                    message += f"{emoji} {time_str}: {old_status}→{new_status}\n"
+        
+        keyboard = [[
+            InlineKeyboardButton("🔙 חזור", callback_data=f"monitor_detail_{service_id}")
+        ]]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+    async def test_monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """פקודת בדיקה לסימולציית שינויי סטטוס"""
+        if not context.args:
+            message = "🧪 *פקודת בדיקת ניטור*\n\n"
+            message += "שימוש: `/test_monitor [service_id] [action]`\n\n"
+            message += "*פעולות אפשריות:*\n"
+            message += "• `online` - סימולציה שהשירות עלה\n"
+            message += "• `offline` - סימולציה שהשירות ירד\n"
+            message += "• `cycle` - מחזור מלא (ירידה ואז עלייה)\n\n"
+            message += "*דוגמה:*\n"
+            message += "`/test_monitor srv-123456 offline`"
+            await update.message.reply_text(message, parse_mode='Markdown')
+            return
+        
+        service_id = context.args[0]
+        action = context.args[1] if len(context.args) > 1 else "cycle"
+        
+        # בדיקה אם השירות קיים
+        service = self.db.get_service_activity(service_id)
+        if not service:
+            await update.message.reply_text(f"❌ שירות {service_id} לא נמצא במערכת")
+            return
+        
+        service_name = service.get("service_name", service_id)
+        
+        # בדיקה אם הניטור מופעל
+        monitoring_status = status_monitor.get_monitoring_status(service_id)
+        if not monitoring_status.get("enabled", False):
+            await update.message.reply_text(
+                f"⚠️ ניטור לא מופעל עבור {service_name}\n"
+                f"הפעל ניטור תחילה עם: `/monitor {service_id}`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # קבלת הסטטוס הנוכחי
+        current_status = service.get("last_known_status", "unknown")
+        
+        await update.message.reply_text(f"🧪 מתחיל בדיקה עבור {service_name}...")
+        
+        if action == "online":
+            # סימולציה של עלייה
+            if current_status == "online":
+                # אם כבר online, קודם נוריד ואז נעלה
+                await self._simulate_status_change(service_id, "online", "offline")
+                await asyncio.sleep(2)
+                await self._simulate_status_change(service_id, "offline", "online")
+                await update.message.reply_text(
+                    "✅ סימולציה הושלמה:\n"
+                    "1️⃣ השירות ירד (offline)\n"
+                    "2️⃣ השירות עלה (online)\n\n"
+                    "🔔 אם הניטור פעיל, אמורת לקבל 2 התראות"
+                )
+            else:
+                await self._simulate_status_change(service_id, current_status, "online")
+                await update.message.reply_text(
+                    "✅ סימולציה הושלמה:\n"
+                    "השירות עלה (online)\n\n"
+                    "🔔 אם הניטור פעיל, אמורת לקבל התראה"
+                )
+                
+        elif action == "offline":
+            # סימולציה של ירידה
+            if current_status == "offline":
+                # אם כבר offline, קודם נעלה ואז נוריד
+                await self._simulate_status_change(service_id, "offline", "online")
+                await asyncio.sleep(2)
+                await self._simulate_status_change(service_id, "online", "offline")
+                await update.message.reply_text(
+                    "✅ סימולציה הושלמה:\n"
+                    "1️⃣ השירות עלה (online)\n"
+                    "2️⃣ השירות ירד (offline)\n\n"
+                    "🔔 אם הניטור פעיל, אמורת לקבל 2 התראות"
+                )
+            else:
+                await self._simulate_status_change(service_id, current_status, "offline")
+                await update.message.reply_text(
+                    "✅ סימולציה הושלמה:\n"
+                    "השירות ירד (offline)\n\n"
+                    "🔔 אם הניטור פעיל, אמורת לקבל התראה"
+                )
+                
+        elif action == "cycle":
+            # מחזור מלא
+            statuses = ["offline", "online", "offline", "online"]
+            previous = current_status
+            
+            message = "🔄 מבצע מחזור בדיקה מלא...\n\n"
+            
+            for i, new_status in enumerate(statuses, 1):
+                await self._simulate_status_change(service_id, previous, new_status)
+                message += f"{i}️⃣ {previous} ➡️ {new_status}\n"
+                previous = new_status
+                await asyncio.sleep(2)  # המתנה בין שינויים
+            
+            await update.message.reply_text(
+                f"✅ מחזור בדיקה הושלם!\n\n{message}\n"
+                f"🔔 אמורת לקבל {len(statuses)} התראות"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ פעולה לא מוכרת: {action}\n"
+                "השתמש ב: online, offline, או cycle"
+            )
+    
+    async def _simulate_status_change(self, service_id: str, old_status: str, new_status: str):
+        """סימולציה של שינוי סטטוס"""
+        # עדכון הסטטוס במסד הנתונים
+        self.db.update_service_status(service_id, new_status)
+        self.db.record_status_change(service_id, old_status, new_status)
+        
+        # קבלת מידע על השירות
+        service = self.db.get_service_activity(service_id)
+        service_name = service.get("service_name", service_id)
+        
+        # שליחת התראה אם השינוי משמעותי
+        if status_monitor._is_significant_change(old_status, new_status):
+            # יצירת אימוג'י מתאים
+            if new_status == "online":
+                emoji = "🟢"
+                action = "עלה (בדיקה)"
+            elif new_status == "offline":
+                emoji = "🔴"
+                action = "ירד (בדיקה)"
+            else:
+                emoji = "🟡"
+                action = f"שינה סטטוס ל-{new_status} (בדיקה)"
+            
+            # שליחת התראת בדיקה
+            from notifications import send_notification
+            
+            test_message = f"{emoji} *התראת בדיקה - שינוי סטטוס*\n\n"
+            test_message += f"🧪 זוהי הודעת בדיקה!\n\n"
+            test_message += f"🤖 השירות: *{service_name}*\n"
+            test_message += f"🆔 ID: `{service_id}`\n"
+            test_message += f"📊 הפעולה: {action}\n"
+            test_message += f"⬅️ סטטוס קודם: {old_status}\n"
+            test_message += f"➡️ סטטוס חדש: {new_status}\n\n"
+            
+            if new_status == "online":
+                test_message += "✅ השירות חזר לפעילות תקינה"
+            elif new_status == "offline":
+                test_message += "⚠️ השירות ירד ואינו זמין"
+                
+            send_notification(test_message)
 
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -378,6 +1120,11 @@ def main():
     # הפעלת המתזמן ברקע
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
+    
+    # הפעלת ניטור סטטוס אם מופעל בהגדרות
+    if config.STATUS_MONITORING_ENABLED:
+        status_monitor.start_monitoring()
+        print("✅ ניטור סטטוס הופעל")
     
     # שליחת התראת הפעלה
     send_startup_notification()

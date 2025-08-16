@@ -98,6 +98,12 @@ class ActivityTracker:
     
     def manual_suspend_service(self, service_id: str) -> dict:
         """השעיה ידנית של שירות"""
+        # Import here to avoid circular dependency
+        from status_monitor import status_monitor
+        
+        # סימון פעולה ידנית
+        status_monitor.mark_manual_action(service_id)
+        
         # קבלת מידע על השירות
         service = db.get_service_activity(service_id)
         service_name = service.get("service_name", service_id) if service else service_id
@@ -119,6 +125,12 @@ class ActivityTracker:
     
     def manual_resume_service(self, service_id: str) -> dict:
         """החזרה ידנית של שירות לפעילות"""
+        # Import here to avoid circular dependency
+        from status_monitor import status_monitor
+        
+        # סימון פעולה ידנית
+        status_monitor.mark_manual_action(service_id)
+        
         # קבלת מידע על השירות
         service = db.get_service_activity(service_id)
         service_name = service.get("service_name", service_id) if service else service_id

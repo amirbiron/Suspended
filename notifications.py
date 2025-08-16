@@ -35,6 +35,27 @@ def send_notification(message: str):
         print(f"❌ שגיאה בשליחת התראה: {str(e)}")
         return False
 
+def send_status_change_notification(service_id: str, service_name: str, 
+                                   old_status: str, new_status: str, 
+                                   emoji: str = "🔔", action: str = "שינה סטטוס"):
+    """שליחת התראה על שינוי סטטוס של שירות"""
+    message = f"{emoji} *התראת שינוי סטטוס*\n\n"
+    message += f"🤖 השירות: *{service_name}*\n"
+    message += f"🆔 ID: `{service_id}`\n"
+    message += f"📊 הפעולה: {action}\n"
+    message += f"⬅️ סטטוס קודם: {old_status}\n"
+    message += f"➡️ סטטוס חדש: {new_status}\n\n"
+    
+    # הוספת הסבר למשמעות
+    if new_status == "online":
+        message += "✅ השירות חזר לפעילות תקינה"
+    elif new_status == "offline":
+        message += "⚠️ השירות ירד ואינו זמין"
+    elif new_status == "deploying":
+        message += "🔄 השירות בתהליך פריסה"
+        
+    return send_notification(message)
+
 def send_startup_notification():
     """התראה על הפעלת הבוט"""
     message = "🚀 בוט ניטור Render הופעל בהצלחה"
@@ -49,9 +70,13 @@ def send_daily_report():
     suspended_services = [s for s in all_services if s.get("status") == "suspended"]
     active_services = [s for s in all_services if s.get("status") != "suspended"]
     
+    # קבלת שירותים עם ניטור סטטוס
+    monitored_services = db.get_services_with_monitoring_enabled()
+    
     message = "📊 *דוח יומי - מצב השירותים*\n\n"
     message += f"🟢 שירותים פעילים: {len(active_services)}\n"
     message += f"🔴 שירותים מושעים: {len(suspended_services)}\n"
+    message += f"👁️ שירותים בניטור סטטוס: {len(monitored_services)}\n"
     message += f"📈 סה\"כ שירותים: {len(all_services)}\n\n"
     
     if suspended_services:
@@ -71,5 +96,13 @@ def send_daily_report():
                 message += f"• {name} (מושעה {days_suspended} ימים)\n"
             else:
                 message += f"• {name}\n"
+    
+    if monitored_services:
+        message += "\n*שירותים בניטור סטטוס:*\n"
+        for service in monitored_services:
+            name = service.get("service_name", service["_id"])
+            status = service.get("last_known_status", "unknown")
+            status_emoji = "🟢" if status == "online" else "🔴" if status == "offline" else "🟡"
+            message += f"{status_emoji} {name} ({status})\n"
     
     send_notification(message)
