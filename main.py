@@ -85,6 +85,35 @@ class RenderMonitorBot:
         self.setup_handlers()
         # הפקודות יוגדרו ב-post_init
         
+    def _simplified_status_live_or_db(self, service: dict) -> str:
+        """מחזיר סטטוס מפושט (online/offline/deploying/unknown) לפי מצב חי מ-Render,
+        ובנפילה חוזר לערך שמור במסד הנתונים.
+        """
+        service_id = service.get("_id")
+        try:
+            live_status = self.render_api.get_service_status(service_id)
+            if live_status:
+                return status_monitor._simplify_status(live_status)
+        except Exception:
+            pass
+        # נפילה או אין סטטוס חי – נשתמש ב-last_known_status אם קיים
+        fallback = service.get("last_known_status", "unknown")
+        return status_monitor._simplify_status(fallback) if fallback else "unknown"
+
+    def _status_to_emoji(self, simplified_status: str) -> str:
+        """מפה סטטוס מפושט לאימוג'י תצוגה."""
+        if simplified_status == "online":
+            return "🟢"
+        if simplified_status == "offline":
+            return "🔴"
+        # ל-deploying/unknown נחזיר צהוב
+        return "🟡"
+
+    def _get_status_emoji_for_service(self, service: dict) -> str:
+        """נוחות: סטטוס חי->מפושט->אימוג'י עבור שירות."""
+        simplified = self._simplified_status_live_or_db(service)
+        return self._status_to_emoji(simplified)
+
     async def setup_bot_commands(self, app: Application):
         """הגדרת תפריט הפקודות בטלגרם (מורץ לאחר אתחול האפליקציה)"""
         from telegram import BotCommand
@@ -255,9 +284,8 @@ class RenderMonitorBot:
             service_id = service["_id"]
             service_name = service.get("service_name", service_id)
             
-            # סטטוס נוכחי
-            current_status = service.get("last_known_status", "unknown")
-            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            # סטטוס נוכחי (חי מ-Render עם נפילה ל-DB)
+            status_emoji = self._get_status_emoji_for_service(service)
             
             # אימוג'י ניטור
             monitoring_status = status_monitor.get_monitoring_status(service_id)
@@ -652,10 +680,10 @@ class RenderMonitorBot:
         else:
             message += "🔇 *התראות דיפלוי: כבויות*\n"
         
-        # סטטוס נוכחי
-        current_status = service.get("last_known_status", "unknown")
-        status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
-        message += f"\nסטטוס נוכחי: {status_emoji} {current_status}\n"
+        # סטטוס נוכחי (חי)
+        simplified_status = self._simplified_status_live_or_db(service)
+        status_emoji = self._status_to_emoji(simplified_status)
+        message += f"\nסטטוס נוכחי: {status_emoji} {simplified_status}\n"
         
         # כפתורים
         keyboard = []
@@ -765,9 +793,8 @@ class RenderMonitorBot:
             monitoring_status = status_monitor.get_monitoring_status(service_id)
             is_monitored = monitoring_status.get("enabled", False)
             
-            # סטטוס נוכחי
-            current_status = service.get("last_known_status", "unknown")
-            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            # סטטוס נוכחי (חי)
+            status_emoji = self._get_status_emoji_for_service(service)
             
             # אימוג'י ניטור
             monitor_emoji = "👁️" if is_monitored else "👁️‍🗨️"
@@ -818,8 +845,8 @@ class RenderMonitorBot:
         for service in monitored_services:
             service_id = service["_id"]
             service_name = service.get("service_name", service_id)
-            current_status = service.get("last_known_status", "unknown")
-            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            # סטטוס נוכחי (חי)
+            status_emoji = self._get_status_emoji_for_service(service)
             
             button_text = f"{status_emoji} 👁️ {service_name[:20]}"
             
