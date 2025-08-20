@@ -19,7 +19,23 @@ from activity_tracker import activity_tracker
 from database import db
 from notifications import send_daily_report, send_startup_notification
 from render_api import render_api
-from status_monitor import status_monitor  # New import
+try:
+    from status_monitor import status_monitor  # New import
+except Exception:
+    # Fallback: אם הייבוא נכשל (למשל בקומיט ביניים), ניצור אינסטנס כדי למנוע קריסה
+    from types import SimpleNamespace
+
+    class _FallbackStatusMonitor:
+        def __getattr__(self, name):
+            def _noop(*args, **kwargs):
+                logging.getLogger(__name__).warning(
+                    "Fallback status_monitor noop called: %s", name
+                )
+                return None
+
+            return _noop
+
+    status_monitor = _FallbackStatusMonitor()
 
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
