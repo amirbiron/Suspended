@@ -139,7 +139,7 @@ reporter = create_reporter(
 # בכל handler - שורה אחת!
 def handle_message(update, context):
     reporter.report_activity(update.effective_user.id)  # זה הכל!
-    
+
     # השאר הלוגיקה שלך כרגיל...
 ```
 

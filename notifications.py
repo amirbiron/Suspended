@@ -1,6 +1,10 @@
-import requests
-import config
 from datetime import datetime
+from typing import Optional
+
+import requests
+
+import config
+
 
 def send_notification(message: str):
     """שליחת התראה לאדמין דרך טלגרם"""
@@ -8,25 +12,21 @@ def send_notification(message: str):
         print("⚠️ לא מוגדר ADMIN_CHAT_ID או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה")
         print(f"הודעה: {message}")
         return False
-    
+
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
-    
+
     # הוספת חותמת זמן
     timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
-    formatted_message = f"🤖 *Render Monitor Bot*\n"
+    formatted_message = "🤖 *Render Monitor Bot*\n"
     formatted_message += f"⏰ {timestamp}\n\n"
     formatted_message += message
-    
-    payload = {
-        "chat_id": config.ADMIN_CHAT_ID,
-        "text": formatted_message,
-        "parse_mode": "Markdown"
-    }
-    
+
+    payload = {"chat_id": config.ADMIN_CHAT_ID, "text": formatted_message, "parse_mode": "Markdown"}
+
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
         if response.status_code == 200:
-            print(f"✅ התראה נשלחה בהצלחה")
+            print("✅ התראה נשלחה בהצלחה")
             return True
         else:
             print(f"❌ כשלון בשליחת התראה: {response.status_code} - {response.text}")
@@ -35,19 +35,20 @@ def send_notification(message: str):
         print(f"❌ שגיאה בשליחת התראה: {str(e)}")
         return False
 
-def send_status_change_notification(service_id: str, service_name: str, 
-                                   old_status: str, new_status: str, 
-                                   emoji: str = "🔔", action: str = "שינה סטטוס"):
+
+def send_status_change_notification(
+    service_id: str, service_name: str, old_status: str, new_status: str, emoji: str = "🔔", action: str = "שינה סטטוס"
+):
     """שליחת התראה על שינוי סטטוס של שירות"""
     message = f"{emoji} *התראת שינוי סטטוס*\n\n"
     message += f"🤖 השירות: *{service_name}*\n"
     # בטלגרם backticks יכולים לשבור Markdown אם יש תווים מיוחדים ב-ID, נחליף backtick חזרה
-    safe_service_id = str(service_id).replace('`', '\\`')
+    safe_service_id = str(service_id).replace("`", "\\`")
     message += f"🆔 ID: `{safe_service_id}`\n"
     message += f"📊 הפעולה: {action}\n"
     message += f"⬅️ סטטוס קודם: {old_status}\n"
     message += f"➡️ סטטוס חדש: {new_status}\n\n"
-    
+
     # הוספת הסבר למשמעות
     if new_status == "online":
         message += "✅ השירות חזר לפעילות תקינה"
@@ -55,50 +56,58 @@ def send_status_change_notification(service_id: str, service_name: str,
         message += "⚠️ השירות ירד ואינו זמין"
     elif new_status == "deploying":
         message += "🔄 השירות בתהליך פריסה"
-        
+
     return send_notification(message)
+
 
 def send_startup_notification():
     """התראה על הפעלת הבוט"""
     message = "🚀 בוט ניטור Render הופעל בהצלחה"
     send_notification(message)
 
-def send_deploy_event_notification(service_name: str, service_id: str, status: str, commit_message: str = None):
+
+def send_deploy_event_notification(
+    service_name: str,
+    service_id: str,
+    status: str,
+    commit_message: Optional[str] = None,
+) -> bool:
     """התראה ממוקדת על דיפלוי שהסתיים (סיום/כשלון)"""
     emoji = "🚀" if str(status).lower() in ["succeeded", "success", "completed", "deployed", "live"] else "⚠️"
     title = "סיום פריסה מוצלח" if emoji == "🚀" else "כשלון בפריסה"
-    safe_service_id = str(service_id).replace('`', '\\`')
-    safe_service_name = str(service_name).replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
+    safe_service_id = str(service_id).replace("`", "\\`")
+    safe_service_name = str(service_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
     message = f"{emoji} *{title}*\n\n"
     message += f"🤖 השירות: *{safe_service_name}*\n"
     message += f"🆔 ID: `{safe_service_id}`\n"
     message += f"סטטוס דיפלוי: {status}\n"
     if commit_message:
         # חיתוך כדי לא לשבור הודעות ארוכות במיוחד
-        trimmed = commit_message.strip().replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
+        trimmed = commit_message.strip().replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
         if len(trimmed) > 200:
             trimmed = trimmed[:197] + "..."
         message += f"📝 Commit: {trimmed}\n"
-    return send_notification(message)
+    return bool(send_notification(message))
+
 
 def send_daily_report():
     """דוח יומי על מצב השירותים"""
     from database import db
-    
+
     # קבלת נתונים
     all_services = db.get_all_services()
     suspended_services = [s for s in all_services if s.get("status") == "suspended"]
     active_services = [s for s in all_services if s.get("status") != "suspended"]
-    
+
     # קבלת שירותים עם ניטור סטטוס
     monitored_services = db.get_services_with_monitoring_enabled()
-    
+
     message = "📊 *דוח יומי - מצב השירותים*\n\n"
     message += f"🟢 שירותים פעילים: {len(active_services)}\n"
     message += f"🔴 שירותים מושעים: {len(suspended_services)}\n"
     message += f"👁️ שירותים בניטור סטטוס: {len(monitored_services)}\n"
-    message += f"📈 סה\"כ שירותים: {len(all_services)}\n\n"
-    
+    message += f'📈 סה"כ שירותים: {len(all_services)}\n\n'
+
     if suspended_services:
         message += "*שירותים מושעים:*\n"
         for service in suspended_services:
@@ -107,6 +116,7 @@ def send_daily_report():
             if suspended_at:
                 try:
                     from datetime import timezone
+
                     if suspended_at.tzinfo is None:
                         suspended_at = suspended_at.replace(tzinfo=timezone.utc)
                     days_suspended = (datetime.now(timezone.utc) - suspended_at).days
@@ -116,7 +126,7 @@ def send_daily_report():
                 message += f"• {name} (מושעה {days_suspended} ימים)\n"
             else:
                 message += f"• {name}\n"
-    
+
     if monitored_services:
         message += "\n*שירותים בניטור סטטוס:*\n"
         for service in monitored_services:
@@ -124,5 +134,5 @@ def send_daily_report():
             status = service.get("last_known_status", "unknown")
             status_emoji = "🟢" if status == "online" else "🔴" if status == "offline" else "🟡"
             message += f"{status_emoji} {name} ({status})\n"
-    
+
     send_notification(message)

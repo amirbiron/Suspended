@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -29,7 +30,7 @@ SERVICES_TO_MONITOR = [
 
 # הגדרות התראות
 INACTIVE_DAYS_ALERT = 3  # התראה אחרי כמה ימים של חוסר פעילות
-AUTO_SUSPEND_DAYS = 7    # השעיה אוטומטית אחרי כמה ימים
+AUTO_SUSPEND_DAYS = 7  # השעיה אוטומטית אחרי כמה ימים
 CHECK_INTERVAL_HOURS = 24  # בדיקה כל כמה שעות
 
 # הגדרות ניטור סטטוס
