@@ -61,7 +61,7 @@ class StatusMonitor:
 
     def check_all_services(self):
         """בדיקת הסטטוס של כל השירותים המנוטרים"""
-        logger.debug("Checking status of all monitored services")
+        logger.info("Checking status of services (status + deploy alerts)")
 
         # קבלת רשימת השירותים לניטור מהדאטאבייס
         monitored_services = db.get_status_monitored_services()
@@ -70,6 +70,12 @@ class StatusMonitor:
             deploy_notif_services = db.get_services_with_deploy_notifications_enabled()
         except Exception:
             deploy_notif_services = []
+        logger.info(
+            "Fetched services: status_monitored=%d, deploy_notif_enabled=%d",
+            len(monitored_services),
+            len(deploy_notif_services),
+        )
+
         # מיזוג ייחודי לפי service_id
         all_relevant_services = {}
         for s in monitored_services:
@@ -77,6 +83,13 @@ class StatusMonitor:
         for s in deploy_notif_services:
             all_relevant_services.setdefault(s["_id"], s)
         services_to_check = list(all_relevant_services.values())
+
+        # Fallback: אם אין כלום ב-DB – נשתמש ברשימת config כדי לפחות לבדוק אירועי דיפלוי
+        if not services_to_check and getattr(config, "SERVICES_TO_MONITOR", []):
+            logger.warning(
+                "No services found in DB; using fallback from config.SERVICES_TO_MONITOR (deploy checks only)"
+            )
+            services_to_check = [{"_id": sid, "service_name": sid} for sid in config.SERVICES_TO_MONITOR]
 
         any_deploying = False
         for service_doc in services_to_check:
@@ -152,12 +165,15 @@ class StatusMonitor:
     def _check_deploy_events(self, service_id: str, service_doc: dict):
         """בודק אם יש דיפלוי חדש שהסתיים ושולח התראה פעם אחת"""
         try:
+            logger.info("Checking latest deploy for service %s", service_id)
             info = render_api.get_latest_deploy_info(service_id)
             if not info:
+                logger.debug("No deploy info returned for %s", service_id)
                 return
             deploy_id = info.get("id")
             status = (info.get("status") or "").lower()
             if not deploy_id:
+                logger.debug("Latest deploy has no id for %s: %s", service_id, info)
                 return
 
             # האם כבר דווח?
@@ -184,10 +200,18 @@ class StatusMonitor:
 
             simplified = self._simplify_status(status)
             if status in terminal_statuses or simplified in {"online", "offline"}:
+                logger.info(
+                    "Terminal deploy detected for %s: id=%s, status=%s (simplified=%s)",
+                    service_id,
+                    deploy_id,
+                    status,
+                    simplified,
+                )
                 service_name = service_doc.get("service_name", service_id)
                 commit_message = info.get("commitMessage")
                 sent = send_deploy_event_notification(service_name, service_id, status, commit_message)
                 if sent:
+                    logger.info("Deploy notification sent for %s (deploy_id=%s)", service_id, deploy_id)
                     db.record_reported_deploy(service_id, deploy_id, status)
                 else:
                     logger.warning(

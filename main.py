@@ -142,6 +142,7 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("resume", self.resume_command))
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
+        self.app.add_handler(CommandHandler("diag", self.diag_command))
 
         # Monitor commands
         self.app.add_handler(CommandHandler("monitor", self.monitor_command))
@@ -205,6 +206,7 @@ class RenderMonitorBot:
 /list_monitored - רשימת שירותים בניטור סטטוס
 /test_monitor [service_id] [action] - בדיקת התראות
 /clear_test_data - ניקוי נתוני בדיקות
+/diag - דיאגנוסטיקה מהירה
 
 /help - הצגת הודעה זו
         """
@@ -212,6 +214,28 @@ class RenderMonitorBot:
         if msg is None:
             return
         await msg.reply_text(help_text, parse_mode="Markdown")
+
+    async def diag_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מציג דיאגנוסטיקה מהירה של מצב הניטור וההתראות"""
+        msg = update.message
+        if msg is None:
+            return
+        try:
+            from database import db
+
+            monitored = db.get_status_monitored_services()
+            deploy_enabled = db.get_services_with_deploy_notifications_enabled()
+
+            message = "🛠️ *דיאגנוסטיקה מהירה*\n\n"
+            message += f"🔁 ניטור רץ: {'כן' if (status_monitor.monitoring_thread and status_monitor.monitoring_thread.is_alive()) else 'לא'}\n"
+            message += f"⏱️ מרווח בדיקה: {status_monitor.deploy_check_interval if status_monitor.deploying_active else status_monitor.check_interval}s\n"
+            message += f"👁️ שירותים בניטור סטטוס: {len(monitored)}\n"
+            message += f"🚀 שירותים עם התראות דיפלוי: {len(deploy_enabled)}\n"
+            if not monitored and not deploy_enabled and not config.SERVICES_TO_MONITOR:
+                message += "⚠️ אין שירותים לבדיקה (DB ריק ואין SERVICES_TO_MONITOR)\n"
+            await msg.reply_text(message, parse_mode="Markdown")
+        except Exception as e:
+            await msg.reply_text(f"❌ כשל בדיאגנוסטיקה: {e}")
 
     async def monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הפעלת ניטור סטטוס לשירות"""
