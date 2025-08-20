@@ -6,47 +6,50 @@ import requests
 import config
 
 
-def send_notification(message: str):
-    """שליחת התראה לאדמין דרך טלגרם"""
-    if not config.ADMIN_CHAT_ID or not config.TELEGRAM_BOT_TOKEN:
-        print("⚠️ לא מוגדר ADMIN_CHAT_ID או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה")
+def _send_to_chat(chat_id: str, message: str) -> bool:
+    """שליחת הודעה לצ'אט נתון דרך טלגרם"""
+    if not chat_id or not config.TELEGRAM_BOT_TOKEN:
+        print("⚠️ חסר chat_id או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה")
         print(f"הודעה: {message}")
         return False
 
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    # הוספת חותמת זמן
     timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
     formatted_message = "🤖 *Render Monitor Bot*\n"
     formatted_message += f"⏰ {timestamp}\n\n"
     formatted_message += message
 
-    payload = {"chat_id": config.ADMIN_CHAT_ID, "text": formatted_message, "parse_mode": "Markdown"}
+    payload = {"chat_id": str(chat_id), "text": formatted_message, "parse_mode": "Markdown"}
 
     try:
         response = requests.post(url, json=payload, timeout=15)
         if response.status_code != 200:
             print(f"❌ כשלון בשליחת התראה: {response.status_code} - {response.text}")
             return False
-
-        # Telegram API מחזיר 200 גם במקרה של שגיאה לוגית, יש לבדוק את השדה 'ok'
         try:
             data = response.json()
         except Exception:
             print("❌ תגובת טלגרם אינה JSON תקין")
             return False
-
         if bool(data.get("ok")):
             print("✅ התראה נשלחה בהצלחה")
             return True
-
-        # לא נשלח בפועל – הדפס תאור השגיאה
         description = data.get("description") or data
         print(f"❌ טלגרם דחה את ההודעה: {description}")
         return False
     except requests.RequestException as e:
         print(f"❌ שגיאה בשליחת התראה: {str(e)}")
         return False
+
+
+def send_notification(message: str):
+    """שליחת התראה לאדמין דרך טלגרם"""
+    if not config.ADMIN_CHAT_ID or not config.TELEGRAM_BOT_TOKEN:
+        print("⚠️ לא מוגדר ADMIN_CHAT_ID או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה")
+        print(f"הודעה: {message}")
+        return False
+    return _send_to_chat(config.ADMIN_CHAT_ID, message)
 
 
 def send_status_change_notification(
@@ -76,7 +79,22 @@ def send_status_change_notification(
     elif new_status == "deploying":
         message += "🔄 השירות בתהליך פריסה"
 
-    return send_notification(message)
+    # שליחה לאדמין
+    sent_admin = send_notification(message)
+
+    # בנוסף: אם יש מפעיל ניטור לשירות – שלח גם אליו
+    try:
+        from database import db
+
+        service = db.get_service_activity(service_id) or {}
+        monitoring_info = service.get("status_monitoring", {})
+        enabled_by = monitoring_info.get("enabled_by")
+        if enabled_by and str(enabled_by) != str(config.ADMIN_CHAT_ID):
+            _send_to_chat(str(enabled_by), message)
+    except Exception:
+        pass
+
+    return sent_admin
 
 
 def send_startup_notification():
@@ -108,7 +126,21 @@ def send_deploy_event_notification(
         if len(trimmed) > 200:
             trimmed = trimmed[:197] + "..."
         message += f"📝 Commit: {trimmed}\n"
-    return bool(send_notification(message))
+    sent_admin = bool(send_notification(message))
+
+    # בנוסף: ניסיון לשלוח גם למי שהפעיל ניטור על השירות (אם קיים)
+    try:
+        from database import db
+
+        service = db.get_service_activity(service_id) or {}
+        monitoring_info = service.get("status_monitoring", {})
+        enabled_by = monitoring_info.get("enabled_by")
+        if enabled_by and str(enabled_by) != str(config.ADMIN_CHAT_ID):
+            _send_to_chat(str(enabled_by), message)
+    except Exception:
+        pass
+
+    return sent_admin
 
 
 def send_daily_report():
