@@ -131,29 +131,31 @@ class RenderAPI:
             return None
     
     def get_service_status(self, service_id: str) -> Optional[str]:
-        """קבלת סטטוס שירות
-        מנסה קודם את סטטוס הדיפלוי האחרון, ונופל חזרה למידע שירות כולל דגל השעיה.
+        """קבלת סטטוס שירות עדכני
+        עדיפות למידע שירות חי (online/offline/suspended).
+        משתמש בסטטוס דיפלוי רק כדי לציין מצב 'deploying', כדי להימנע מסיווג שגוי כ-offline כשדיפלוי נכשל אך הגרסה הקודמת עדיין פועלת.
         """
-        # קודם ננסה להביא את סטטוס הדיפלוי האחרון
+        # קודם כל ננסה להביא מידע שירות חי
+        service_info = self.get_service_info(service_id)
+        if isinstance(service_info, dict) and service_info:
+            # אינדיקציית השעיה מפורשת
+            if service_info.get("suspended") is True or service_info.get("suspenders"):
+                return "suspended"
+            # סטטוס/מצב ישיר מהאובייקט
+            status = service_info.get("status") or service_info.get("state")
+            if status:
+                return status
+        
+        # אם לא קיבלנו סטטוס ברור, נבדוק סטטוס דיפלוי
         deploy_status = self._get_latest_deploy_status(service_id)
         if deploy_status:
-            return deploy_status
+            # נשתמש בדיפלוי רק כדי לשקף 'deploying'
+            lower = str(deploy_status).lower()
+            if any(k in lower for k in ["deploy", "build", "progress", "start", "provision", "pending", "queue", "updat", "initializ", "restarting"]):
+                return "deploying"
+            # מצבי סיום כמו failed/succeeded אינם משקפים בהכרח מצב ריצה נוכחי
+            # ולכן לא נקבע בהם online/offline כאן.
         
-        # נפילה חזרה למידע שירות כללי
-        service_info = self.get_service_info(service_id)
-        if service_info:
-            # אם קיים שדה סטטוס, נחזיר אותו
-            if isinstance(service_info, dict):
-                status = service_info.get("status") or service_info.get("state")
-                if status:
-                    return status
-                # היגיון נוסף: אם השירות מושעה, נחזיר "suspended" כדי למפות ל-offline
-                if service_info.get("suspended") is True:
-                    return "suspended"
-                # ייתכנו מצבים שבהם אין סטטוס אבל יש אינדיקציה לפעילות
-                if service_info.get("suspenders"):
-                    return "suspended"
-        # אם לא הצלחנו לקבוע סטטוס
         return "unknown"
     
     def list_services(self) -> list:
