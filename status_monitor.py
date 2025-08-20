@@ -111,6 +111,9 @@ class StatusMonitor:
 
                     if status_monitoring_enabled and not manual_skip:
                         self._process_status_change(service_id, current_status, service_doc)
+                    elif deploy_notif_enabled:
+                        # גם אם ניטור סטטוס כבוי, נטפל במעבר deploy->(online/offline) לשם התראת דיפלוי
+                        self._process_deploy_transition_for_notif(service_id, current_status, service_doc)
                 else:
                     logger.warning(f"Could not get status for service {service_id}")
 
@@ -124,6 +127,27 @@ class StatusMonitor:
         # עדכון דגל פריסה פעילה עבור קצב הבדיקה
         # אם הופעלו התראות דיפלוי לשירותים כלשהם – נשתמש בקצב המהיר כדי לקטוף אירועי סיום מהר יותר
         self.deploying_active = any_deploying or bool(deploy_notif_services)
+
+    def _process_deploy_transition_for_notif(self, service_id: str, current_status: str, service_doc: dict):
+        """שליחת התראת סיום דיפלוי גם כאשר ניטור סטטוס כבוי, אם דגל התראות דיפלוי מופעל.
+
+        מטרה: לכסות מקרים של Resume/Start שלא מייצרים Deploy Event, אך כן עוברים דרך
+        'deploying' במצב החי של השירות.
+        """
+        service_name = service_doc.get("service_name", service_id)
+        last_status = service_doc.get("last_known_status")
+
+        new_simple = self._simplify_status(current_status)
+        if last_status is None:
+            db.update_service_status(service_id, new_simple)
+            return
+
+        old_simple = self._simplify_status(last_status)
+        if old_simple != new_simple and old_simple == "deploying" and new_simple in {"online", "offline"}:
+            self._send_status_notification(service_id, service_name, old_simple, new_simple)
+
+        # עדכון הסטטוס במסד הנתונים כדי שנוכל לזהות מעברים בהמשך
+        db.update_service_status(service_id, new_simple)
 
     def _check_deploy_events(self, service_id: str, service_doc: dict):
         """בודק אם יש דיפלוי חדש שהסתיים ושולח התראה פעם אחת"""
