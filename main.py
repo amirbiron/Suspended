@@ -43,24 +43,33 @@ def cleanup_mongo_lock():
 def manage_mongo_lock():
     """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה עם יציאה נקייה."""
     pid = os.getpid()
-    now = datetime.now(timezone.utc)  # 'now' הוא מודע לאזור זמן (aware)
+    now = datetime.now(timezone.utc)
 
     lock = db.db.locks.find_one({"_id": LOCK_ID})
     if lock:
-        lock_time = lock.get("timestamp", now)  # 'lock_time' מגיע מה-DB והוא תמים (naive)
-
-        # --- התיקון נמצא כאן ---
-        # אם התאריך מה-DB הוא 'תמים', אנחנו הופכים אותו ל'מודע' עם אזור זמן UTC
-        if lock_time.tzinfo is None:
+        lock_time = lock.get("timestamp", now)
+        if getattr(lock_time, "tzinfo", None) is None:
             lock_time = lock_time.replace(tzinfo=timezone.utc)
 
-        # עכשיו שני התאריכים מודעים וניתן לבצע חישוב
-        if (now - lock_time) > timedelta(hours=1):
-            print(f"WARNING: Found stale MongoDB lock from {lock_time}. Overwriting.")
-            db.db.locks.delete_one({"_id": LOCK_ID})
-        else:
-            print("INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
+        # אם הנעילה טרייה יחסית — נצא; אם ישנה — נדרוס
+        if (now - lock_time) <= timedelta(minutes=10):
+            print("INFO: Lock exists and is recent. Another instance likely running. Exiting.")
             sys.exit(0)
+        # נסיון לזהות נעילה ישנה אך עדיין יש מופע פעיל באוויר באמצעות pid
+        other_pid = lock.get("pid")
+        if other_pid and other_pid != pid:
+            try:
+                # ב־Linux, os.kill(pid, 0) בודקת קיום תהליך בלי להרוג
+                import signal
+
+                os.kill(int(other_pid), 0)
+                # אם לא זרק — התהליך עדיין חי; נצא
+                print("INFO: Existing process seems alive. Exiting.")
+                sys.exit(0)
+            except Exception:
+                # אין תהליך — נמחק נעילה
+                print(f"WARNING: Found stale MongoDB lock from {lock_time} with dead pid {other_pid}. Overwriting.")
+                db.db.locks.delete_one({"_id": LOCK_ID})
 
     try:
         db.db.locks.insert_one({"_id": LOCK_ID, "pid": pid, "timestamp": now})
@@ -1086,9 +1095,14 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """לוכד את כל השגיאות ושולח אותן ללוג."""
     logger = logging.getLogger(__name__)
     if isinstance(context.error, Conflict):
-        # מתמודד עם שגיאת הקונפליקט הנפוצה בשקט יחסי
-        logger.warning("⚠️ Conflict error detected, likely another bot instance is running. Ignoring.")
-        return  # יוצאים מהפונקציה כדי לא להדפיס את כל השגיאה הארוכה
+        # יש מופע נוסף שרץ עם אותו token. כדי למנוע ריקות/בלגן — נסגור את התהליך הנוכחי
+        logger.warning("⚠️ Conflict error detected: another bot instance is running. Exiting this instance.")
+        try:
+            # נסיון לשחרר נעילה לפני יציאה שקטה
+            db.db.locks.delete_one({"_id": LOCK_ID})
+        except Exception:
+            pass
+        sys.exit(0)
 
     # עבור כל שגיאה אחרת, מדפיסים את המידע המלא
     logging.error("❌ Exception while handling an update:", exc_info=context.error)
@@ -1138,10 +1152,12 @@ def main():
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
 
-    # הפעלת ניטור סטטוס אם מופעל בהגדרות
-    if config.STATUS_MONITORING_ENABLED:
+    # הפעלת ניטור סטטוס תמידית; אם לא רוצים — ניתן לכבות ע"י אי-הפעלת שירותים
+    try:
         status_monitor.start_monitoring()
         print("✅ ניטור סטטוס הופעל")
+    except Exception as e:
+        print(f"❌ שגיאה בהפעלת ניטור סטטוס: {e}")
 
     # שליחת התראת הפעלה
     send_startup_notification()
