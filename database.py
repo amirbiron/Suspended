@@ -10,6 +10,7 @@ class Database:
         self.user_interactions = self.db.user_interactions
         self.manual_actions = self.db.manual_actions  # Collection for manual actions
         self.status_changes = self.db.status_changes  # Collection for status change history
+        self.deploy_events = self.db.deploy_events    # היסטוריית דיפלויים אחרונים שדווחו
         
     def get_service_activity(self, service_id):
         """קבלת נתוני פעילות של שירות"""
@@ -241,6 +242,21 @@ class Database:
             "new_status": new_status,
             "source": source,
             "timestamp": datetime.now(timezone.utc)
+        })
+
+    # ===== תמיכה בהתראות דיפלוי =====
+    def get_last_reported_deploy_id(self, service_id: str) -> str:
+        """מחזיר את מזהה הדיפלוי האחרון שדווח עבור שירות, אם קיים"""
+        doc = self.deploy_events.find_one({"service_id": service_id}, sort=[("reported_at", -1)])
+        return doc.get("deploy_id") if doc else None
+
+    def record_reported_deploy(self, service_id: str, deploy_id: str, status: str):
+        """רישום דיפלוי שדווח כדי למנוע כפילויות"""
+        return self.deploy_events.insert_one({
+            "service_id": service_id,
+            "deploy_id": deploy_id,
+            "status": status,
+            "reported_at": datetime.now(timezone.utc)
         })
 
 # יצירת instance גלובלי

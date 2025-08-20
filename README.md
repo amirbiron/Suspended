@@ -42,7 +42,16 @@ TELEGRAM_BOT_TOKEN=your_bot_token_here
 ADMIN_CHAT_ID=your_chat_id_here
 RENDER_API_KEY=your_render_api_key_here
 MONGODB_URI=your_mongodb_connection_string
+STATUS_MONITORING_ENABLED=true
+STATUS_CHECK_INTERVAL_SECONDS=300
+DEPLOY_CHECK_INTERVAL_SECONDS=30
 ```
+
+### 📨 התראות דיפלוי
+- ניתן להפעיל/לכבות לכל שירות מתוך המסך "ניהול ניטור סטטוס" בבוט.
+- המערכת שולחת התראה ב-2 מצבים:
+  1. כאשר זוהה מעבר מ-`deploying` ל-`online` או `offline` בזמן הניטור.
+  2. כגיבוי: כאשר דיפלוי הסתיים (success/failed) גם אם החמצנו את שלב ה-`deploying`. במקרה זה ההתראה תישלח פעם אחת לכל דיפלוי חדש.
 
 ### 3. הגדרת שירותים לניטור
 

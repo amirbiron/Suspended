@@ -5,7 +5,7 @@ import time
 from typing import Dict, List, Optional, Set
 from database import db
 from render_api import render_api
-from notifications import send_status_change_notification
+from notifications import send_status_change_notification, send_deploy_event_notification
 import config
 import logging
 
@@ -25,6 +25,8 @@ class StatusMonitor:
         # New: faster polling while a deployment is active
         self.deploy_check_interval = getattr(config, "DEPLOY_CHECK_INTERVAL_SECONDS", 30)
         self.deploying_active = False
+        # זיהוי דיפלויים שהסתיימו גם אם החמצנו את מצב "deploying"
+        self.last_checked_deploy_ids = {}
         
     def start_monitoring(self):
         """הפעלת ניטור הסטטוס ברקע"""
@@ -87,6 +89,9 @@ class StatusMonitor:
                         any_deploying = True
                     
                     self._process_status_change(service_id, current_status, service_doc)
+                    # בדיקת דיפלוי שהסתיים: אם התראות דיפלוי מופעלות
+                    if db.get_deploy_notification_status(service_id):
+                        self._check_deploy_events(service_id, service_doc)
                 else:
                     logger.warning(f"Could not get status for service {service_id}")
                     
@@ -95,6 +100,32 @@ class StatusMonitor:
         
         # עדכון דגל פריסה פעילה עבור קצב הבדיקה
         self.deploying_active = any_deploying
+
+    def _check_deploy_events(self, service_id: str, service_doc: dict):
+        """בודק אם יש דיפלוי חדש שהסתיים ושולח התראה פעם אחת"""
+        try:
+            info = render_api.get_latest_deploy_info(service_id)
+            if not info:
+                return
+            deploy_id = info.get("id")
+            status = (info.get("status") or "").lower()
+            if not deploy_id:
+                return
+
+            # האם כבר דווח?
+            last_reported = db.get_last_reported_deploy_id(service_id)
+            if last_reported == deploy_id:
+                return
+
+            # נשלח התראה רק אם הסטטוס מסמן סוף (success/failure)
+            terminal_statuses = {"succeeded", "success", "completed", "failed", "error", "canceled", "cancelled", "aborted"}
+            if status in terminal_statuses:
+                service_name = service_doc.get("service_name", service_id)
+                commit_message = info.get("commitMessage")
+                send_deploy_event_notification(service_name, service_id, status, commit_message)
+                db.record_reported_deploy(service_id, deploy_id, status)
+        except Exception as e:
+            logger.error(f"Error while checking deploy events for {service_id}: {e}")
     
     def _process_status_change(self, service_id: str, current_status: str, service_doc: dict):
         """עיבוד שינוי סטטוס"""
