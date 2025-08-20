@@ -255,9 +255,27 @@ class RenderMonitorBot:
             service_id = service["_id"]
             service_name = service.get("service_name", service_id)
             
-            # סטטוס נוכחי
-            current_status = service.get("last_known_status", "unknown")
-            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            # סטטוס נוכחי (שאיבה חיה עם נפילה חזרה ל-DB/ניהול)
+            simplified_status = None
+            try:
+                live_raw_status = self.render_api.get_service_status(service_id)
+                if live_raw_status:
+                    simplified_status = status_monitor._simplify_status(live_raw_status)
+                    # עדכון ב-DB כדי לשמור עקביות לתצוגות אחרות
+                    self.db.update_service_status(service_id, simplified_status)
+            except Exception:
+                simplified_status = None
+            if not simplified_status:
+                simplified_status = service.get("last_known_status")
+                if not simplified_status:
+                    mgmt_status = service.get("status")
+                    if mgmt_status == "suspended":
+                        simplified_status = "offline"
+                    elif mgmt_status == "active":
+                        simplified_status = "online"
+                    else:
+                        simplified_status = "unknown"
+            status_emoji = "🟢" if simplified_status == "online" else "🔴" if simplified_status == "offline" else "🟡"
             
             # אימוג'י ניטור
             monitoring_status = status_monitor.get_monitoring_status(service_id)
@@ -653,9 +671,27 @@ class RenderMonitorBot:
             message += "🔇 *התראות דיפלוי: כבויות*\n"
         
         # סטטוס נוכחי
-        current_status = service.get("last_known_status", "unknown")
-        status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
-        message += f"\nסטטוס נוכחי: {status_emoji} {current_status}\n"
+        # ניסיון להביא סטטוס חי ולשמור ב-DB; נפילה חזרה לערכים קיימים אם צריך
+        detail_simplified_status = None
+        try:
+            live_raw_status = self.render_api.get_service_status(service_id)
+            if live_raw_status:
+                detail_simplified_status = status_monitor._simplify_status(live_raw_status)
+                self.db.update_service_status(service_id, detail_simplified_status)
+        except Exception:
+            detail_simplified_status = None
+        if not detail_simplified_status:
+            detail_simplified_status = service.get("last_known_status")
+            if not detail_simplified_status:
+                mgmt_status = service.get("status")
+                if mgmt_status == "suspended":
+                    detail_simplified_status = "offline"
+                elif mgmt_status == "active":
+                    detail_simplified_status = "online"
+                else:
+                    detail_simplified_status = "unknown"
+        status_emoji = "🟢" if detail_simplified_status == "online" else "🔴" if detail_simplified_status == "offline" else "🟡"
+        message += f"\nסטטוס נוכחי: {status_emoji} {detail_simplified_status}\n"
         
         # כפתורים
         keyboard = []
@@ -765,9 +801,27 @@ class RenderMonitorBot:
             monitoring_status = status_monitor.get_monitoring_status(service_id)
             is_monitored = monitoring_status.get("enabled", False)
             
-            # סטטוס נוכחי
-            current_status = service.get("last_known_status", "unknown")
-            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            # סטטוס נוכחי (שאיבה חיה עם נפילה חזרה ל-DB/ניהול)
+            simplified_status = None
+            try:
+                live_raw_status = self.render_api.get_service_status(service_id)
+                if live_raw_status:
+                    simplified_status = status_monitor._simplify_status(live_raw_status)
+                    # עדכון ב-DB כדי לשמור עקביות לתצוגות אחרות
+                    self.db.update_service_status(service_id, simplified_status)
+            except Exception:
+                simplified_status = None
+            if not simplified_status:
+                simplified_status = service.get("last_known_status")
+                if not simplified_status:
+                    mgmt_status = service.get("status")
+                    if mgmt_status == "suspended":
+                        simplified_status = "offline"
+                    elif mgmt_status == "active":
+                        simplified_status = "online"
+                    else:
+                        simplified_status = "unknown"
+            status_emoji = "🟢" if simplified_status == "online" else "🔴" if simplified_status == "offline" else "🟡"
             
             # אימוג'י ניטור
             monitor_emoji = "👁️" if is_monitored else "👁️‍🗨️"
@@ -818,8 +872,26 @@ class RenderMonitorBot:
         for service in monitored_services:
             service_id = service["_id"]
             service_name = service.get("service_name", service_id)
-            current_status = service.get("last_known_status", "unknown")
-            status_emoji = "🟢" if current_status == "online" else "🔴" if current_status == "offline" else "🟡"
+            # סטטוס נוכחי (שאיבה חיה עם נפילה חזרה ל-DB/ניהול)
+            simplified_status = None
+            try:
+                live_raw_status = self.render_api.get_service_status(service_id)
+                if live_raw_status:
+                    simplified_status = status_monitor._simplify_status(live_raw_status)
+                    self.db.update_service_status(service_id, simplified_status)
+            except Exception:
+                simplified_status = None
+            if not simplified_status:
+                simplified_status = service.get("last_known_status")
+                if not simplified_status:
+                    mgmt_status = service.get("status")
+                    if mgmt_status == "suspended":
+                        simplified_status = "offline"
+                    elif mgmt_status == "active":
+                        simplified_status = "online"
+                    else:
+                        simplified_status = "unknown"
+            status_emoji = "🟢" if simplified_status == "online" else "🔴" if simplified_status == "offline" else "🟡"
             
             button_text = f"{status_emoji} 👁️ {service_name[:20]}"
             
