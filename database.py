@@ -191,6 +191,19 @@ class Database:
                 "status_monitoring": 1
             }
         ))
+
+    def get_services_with_deploy_notifications_enabled(self):
+        """החזרת שירותים שעבורם התראות דיפלוי מופעלות (גם אם ניטור סטטוס כבוי)"""
+        return list(self.services.find(
+            {"deploy_notifications_enabled": True},
+            {
+                "_id": 1,
+                "service_name": 1,
+                "last_known_status": 1,
+                "status_monitoring": 1,
+                "deploy_notifications_enabled": 1
+            }
+        ))
     
     def clear_test_data(self):
         """מחיקת נתוני בדיקות דמה מהמערכת"""

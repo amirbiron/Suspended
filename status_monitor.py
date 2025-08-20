@@ -64,19 +64,34 @@ class StatusMonitor:
         
         # קבלת רשימת השירותים לניטור מהדאטאבייס
         monitored_services = db.get_status_monitored_services()
+        # בנוסף: שירותים עם התראות דיפלוי מופעלות גם אם ניטור סטטוס כבוי
+        try:
+            deploy_notif_services = db.get_services_with_deploy_notifications_enabled()
+        except Exception:
+            deploy_notif_services = []
+        # מיזוג ייחודי לפי service_id
+        all_relevant_services = {}
+        for s in monitored_services:
+            all_relevant_services[s["_id"]] = s
+        for s in deploy_notif_services:
+            all_relevant_services.setdefault(s["_id"], s)
+        services_to_check = list(all_relevant_services.values())
         
         any_deploying = False
-        for service_doc in monitored_services:
+        for service_doc in services_to_check:
             service_id = service_doc["_id"]
             
             # דילוג על שירותים שלא מופעל עבורם ניטור
-            if not service_doc.get("status_monitoring", {}).get("enabled", False):
+            # אם ניטור סטטוס כבוי, עדיין נבדוק רק אירועי דיפלוי אם התראות דיפלוי מופעלות
+            status_monitoring_enabled = service_doc.get("status_monitoring", {}).get("enabled", False)
+            deploy_notif_enabled = db.get_deploy_notification_status(service_id)
+            if not status_monitoring_enabled and not deploy_notif_enabled:
                 continue
             
             # בדיקה אם השירות עבר פעולה ידנית לאחרונה
-            if self._is_manual_action_recent(service_id):
-                logger.debug(f"Skipping {service_id} - recent manual action")
-                continue
+            manual_skip = self._is_manual_action_recent(service_id)
+            if manual_skip:
+                logger.debug(f"Recent manual action for {service_id} - will skip status-change notifications but still check deploy events")
             
             try:
                 # קבלת הסטטוס הנוכחי מ-Render
@@ -88,9 +103,10 @@ class StatusMonitor:
                     if simplified_for_flag == "deploying":
                         any_deploying = True
                     
-                    self._process_status_change(service_id, current_status, service_doc)
+                    if status_monitoring_enabled and not manual_skip:
+                        self._process_status_change(service_id, current_status, service_doc)
                     # בדיקת דיפלוי שהסתיים: אם התראות דיפלוי מופעלות
-                    if db.get_deploy_notification_status(service_id):
+                    if deploy_notif_enabled:
                         self._check_deploy_events(service_id, service_doc)
                 else:
                     logger.warning(f"Could not get status for service {service_id}")
@@ -118,8 +134,15 @@ class StatusMonitor:
                 return
 
             # נשלח התראה רק אם הסטטוס מסמן סוף (success/failure)
-            terminal_statuses = {"succeeded", "success", "completed", "failed", "error", "canceled", "cancelled", "aborted"}
-            if status in terminal_statuses:
+            # תמיכה במגוון מצבים סופיים שה-API עשוי להחזיר, ובנוסף שימוש במיפוי הפשוט שלנו
+            terminal_statuses = {
+                "succeeded", "success", "completed", "complete", "finished",
+                "deployed", "live",
+                "failed", "error", "canceled", "cancelled", "aborted"
+            }
+
+            simplified = self._simplify_status(status)
+            if status in terminal_statuses or simplified in {"online", "offline"}:
                 service_name = service_doc.get("service_name", service_id)
                 commit_message = info.get("commitMessage")
                 send_deploy_event_notification(service_name, service_id, status, commit_message)
