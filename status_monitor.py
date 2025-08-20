@@ -171,7 +171,8 @@ class StatusMonitor:
                 logger.debug("No deploy info returned for %s", service_id)
                 return
             deploy_id = info.get("id")
-            status = (info.get("status") or "").lower()
+            raw_status = info.get("status") or ""
+            status = str(raw_status).lower()
             if not deploy_id:
                 logger.debug("Latest deploy has no id for %s: %s", service_id, info)
                 return
@@ -199,6 +200,13 @@ class StatusMonitor:
             }
 
             simplified = self._simplify_status(status)
+            logger.info(
+                "Latest deploy info: service=%s id=%s status_raw=%s simplified=%s",
+                service_id,
+                deploy_id,
+                raw_status,
+                simplified,
+            )
             if status in terminal_statuses or simplified in {"online", "offline"}:
                 logger.info(
                     "Terminal deploy detected for %s: id=%s, status=%s (simplified=%s)",
