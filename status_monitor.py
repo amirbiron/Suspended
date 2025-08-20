@@ -1,6 +1,7 @@
 import logging
+import time
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 import config
@@ -173,6 +174,66 @@ class StatusMonitor:
                     )
         except Exception as e:
             logger.error(f"Error while checking deploy events for {service_id}: {e}")
+
+    def watch_deploy_until_terminal(self, service_id: str, service_name: Optional[str] = None, max_minutes: int = 30):
+        """מעקב אקטיבי אחר דיפלוי עד לסיום ושליחת התראה פעם אחת (חיזוק לוגיקת המוניטור).
+
+        רץ ברקע ולא חוסם. מונע כפילויות באמצעות ה-DB.
+        """
+        def runner():
+            try:
+                deadline = datetime.now(timezone.utc) + timedelta(minutes=max_minutes)
+            except Exception:
+                # Fallback ל-deadline נאיבי
+                deadline = datetime.now() + timedelta(minutes=max_minutes)
+
+            already_reported = db.get_last_reported_deploy_id(service_id)
+
+            while True:
+                now = datetime.now(timezone.utc)
+                if now > deadline:
+                    logger.info(f"Stopping deploy watch for {service_id}: deadline reached")
+                    break
+                try:
+                    info = render_api.get_latest_deploy_info(service_id)
+                    if not info:
+                        time.sleep(self.deploy_check_interval)
+                        continue
+                    deploy_id = info.get("id")
+                    status = (info.get("status") or "").lower()
+                    if already_reported and deploy_id == already_reported:
+                        # כבר דווח
+                        break
+
+                    simplified = self._simplify_status(status)
+                    terminal_statuses = {
+                        "succeeded",
+                        "success",
+                        "completed",
+                        "complete",
+                        "finished",
+                        "deployed",
+                        "live",
+                        "failed",
+                        "error",
+                        "canceled",
+                        "cancelled",
+                        "aborted",
+                    }
+                    if deploy_id and (status in terminal_statuses or simplified in {"online", "offline"}):
+                        name = service_name
+                        if not name:
+                            doc = db.get_service_activity(service_id) or {}
+                            name = doc.get("service_name", service_id)
+                        sent = send_deploy_event_notification(name, service_id, status, info.get("commitMessage"))
+                        if sent:
+                            db.record_reported_deploy(service_id, deploy_id, status)
+                        break
+                except Exception as e:
+                    logger.error(f"Error in deploy watch for {service_id}: {e}")
+                time.sleep(self.deploy_check_interval)
+
+        threading.Thread(target=runner, daemon=True).start()
 
     def _process_status_change(self, service_id: str, current_status: str, service_doc: dict):
         """עיבוד שינוי סטטוס"""

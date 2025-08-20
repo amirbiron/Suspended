@@ -461,6 +461,11 @@ class RenderMonitorBot:
 
             if result["success"]:
                 messages.append(f"✅ {service_name} - הוחזר לפעילות")
+                # התחלת מעקב אקטיבי אחר דיפלוי בעקבות ההפעלה
+                try:
+                    status_monitor.watch_deploy_until_terminal(service_id, service_name)
+                except Exception:
+                    pass
             else:
                 messages.append(f"❌ {service_name} - כשלון: {result['message']}")
 
@@ -665,6 +670,13 @@ class RenderMonitorBot:
                 self.render_api.resume_service(service_id)
                 self.db.update_service_activity(service_id, status="active")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
+                # התחלת מעקב אקטיבי אחר דיפלוי בעקבות ההפעלה
+                try:
+                    service = self.db.get_service_activity(service_id) or {}
+                    service_name = service.get("service_name", service_id)
+                    status_monitor.watch_deploy_until_terminal(service_id, service_name)
+                except Exception:
+                    pass
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
         elif data == "back_to_manage":  # מטפל בכפתור "חזור"
