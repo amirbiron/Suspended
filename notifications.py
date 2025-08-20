@@ -6,7 +6,7 @@ import requests
 import config
 
 
-def _send_to_chat(chat_id: str, message: str) -> bool:
+def _send_to_chat(chat_id: str, message: str, title: Optional[str] = None) -> bool:
     """שליחת הודעה לצ'אט נתון דרך טלגרם"""
     if not chat_id or not config.TELEGRAM_BOT_TOKEN:
         print("⚠️ חסר chat_id או TELEGRAM_BOT_TOKEN - לא ניתן לשלוח התראה")
@@ -16,7 +16,11 @@ def _send_to_chat(chat_id: str, message: str) -> bool:
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
 
     timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
-    formatted_message = "🤖 *Render Monitor Bot*\n"
+    # כותרת מותאמת (לשיפור תצוגת תצוגה מקדימה), אם לא ניתנה נשתמש בכותרת ברירת מחדל
+    if title:
+        formatted_message = f"{title}\n"
+    else:
+        formatted_message = "🤖 *Render Monitor Bot*\n"
     formatted_message += f"⏰ {timestamp}\n\n"
     formatted_message += message
 
@@ -79,8 +83,9 @@ def send_status_change_notification(
     elif new_status == "deploying":
         message += "🔄 השירות בתהליך פריסה"
 
-    # שליחה לאדמין
-    sent_admin = send_notification(message)
+    # שליחה לאדמין עם כותרת קצרה בראש ההודעה
+    short_title = f"{emoji} *{safe_service_name}* – {safe_action}"
+    sent_admin = _send_to_chat(config.ADMIN_CHAT_ID, message, title=short_title)
 
     # בנוסף: אם יש מפעיל ניטור לשירות – שלח גם אליו
     try:
@@ -90,7 +95,7 @@ def send_status_change_notification(
         monitoring_info = service.get("status_monitoring", {})
         enabled_by = monitoring_info.get("enabled_by")
         if enabled_by and str(enabled_by) != str(config.ADMIN_CHAT_ID):
-            _send_to_chat(str(enabled_by), message)
+            _send_to_chat(str(enabled_by), message, title=short_title)
     except Exception:
         pass
 
@@ -126,7 +131,9 @@ def send_deploy_event_notification(
         if len(trimmed) > 200:
             trimmed = trimmed[:197] + "..."
         message += f"📝 Commit: {trimmed}\n"
-    sent_admin = bool(send_notification(message))
+    # כותרת קצרה שמדגישה את שם השירות לשורה הראשונה
+    short_title = f"{emoji} *{safe_service_name}* – {title}"
+    sent_admin = bool(_send_to_chat(config.ADMIN_CHAT_ID, message, title=short_title))
 
     # בנוסף: ניסיון לשלוח גם למי שהפעיל ניטור על השירות (אם קיים)
     try:
@@ -136,7 +143,7 @@ def send_deploy_event_notification(
         monitoring_info = service.get("status_monitoring", {})
         enabled_by = monitoring_info.get("enabled_by")
         if enabled_by and str(enabled_by) != str(config.ADMIN_CHAT_ID):
-            _send_to_chat(str(enabled_by), message)
+            _send_to_chat(str(enabled_by), message, title=short_title)
     except Exception:
         pass
 
