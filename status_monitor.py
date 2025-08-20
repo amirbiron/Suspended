@@ -121,7 +121,8 @@ class StatusMonitor:
                 logger.error(f"Error checking status for {service_id}: {e}")
 
         # עדכון דגל פריסה פעילה עבור קצב הבדיקה
-        self.deploying_active = any_deploying
+        # אם הופעלו התראות דיפלוי לשירותים כלשהם – נשתמש בקצב המהיר כדי לקטוף אירועי סיום מהר יותר
+        self.deploying_active = any_deploying or bool(deploy_notif_services)
 
     def _check_deploy_events(self, service_id: str, service_doc: dict):
         """בודק אם יש דיפלוי חדש שהסתיים ושולח התראה פעם אחת"""
@@ -299,9 +300,11 @@ class StatusMonitor:
                 time_since_action = datetime.now(timezone.utc) - action_time
 
                 # אם הפעולה הידנית האחרונה הייתה בדקות האחרונות, לא שולחים התראה
+                # חריג: לא לדכא התראת סיום דיפלוי (deploying -> online/offline)
                 if time_since_action.total_seconds() < self.cache_duration:
-                    logger.info(f"Skipping notification for {service_name} - recent manual action")
-                    return
+                    if not (old_status == "deploying" and new_status in {"online", "offline"}):
+                        logger.info(f"Skipping notification for {service_name} - recent manual action")
+                        return
 
         # יצירת אימוג'י וטקסט פעולה מתאימים
         if old_status == "deploying" and new_status == "online":
