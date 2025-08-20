@@ -1161,11 +1161,33 @@ def main():
         print(f"❌ שגיאה בהפעלת ניטור סטטוס: {e}")
 
     # שליחת התראת הפעלה
-    send_startup_notification()
+    try:
+        send_startup_notification()
+    except Exception as e:
+        print(f"⚠️ לא הצלחתי לשלוח התראת הפעלה: {e}")
 
     # בדיקה ראשונית
     print("מבצע בדיקה ראשונית...")
-    activity_tracker.check_inactive_services()
+    try:
+        activity_tracker.check_inactive_services()
+    except Exception as e:
+        print(f"⚠️ שגיאה בבדיקה ראשונית: {e}")
+
+    # דיאגנוסטיקה אוטומטית בהפעלה
+    if getattr(config, "DIAG_ON_START", False):
+        try:
+            from database import db
+
+            monitored = db.get_status_monitored_services()
+            deploy_enabled = db.get_services_with_deploy_notifications_enabled()
+            print("=== DIAG ON START ===")
+            print(f"Monitor thread alive: {bool(status_monitor.monitoring_thread and status_monitor.monitoring_thread.is_alive())}")
+            print(f"Check interval: {status_monitor.deploy_check_interval if status_monitor.deploying_active else status_monitor.check_interval}s")
+            print(f"Monitored services: {len(monitored)} | Deploy alerts: {len(deploy_enabled)}")
+            print(f"SERVICES_TO_MONITOR fallback: {len(getattr(config, 'SERVICES_TO_MONITOR', []))}")
+            print("======================")
+        except Exception as e:
+            print(f"⚠️ DIAG_ON_START failed: {e}")
 
     print("✅ הבוט פועל! לחץ Ctrl+C להפסקה")
 
