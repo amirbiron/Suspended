@@ -19,7 +19,23 @@ from activity_tracker import activity_tracker
 from database import db
 from notifications import send_daily_report, send_startup_notification
 from render_api import render_api
-from status_monitor import status_monitor  # New import
+try:
+    from status_monitor import status_monitor  # New import
+except Exception:
+    # Fallback: אם הייבוא נכשל (למשל בקומיט ביניים), ניצור אינסטנס כדי למנוע קריסה
+    from types import SimpleNamespace
+
+    class _FallbackStatusMonitor:
+        def __getattr__(self, name):
+            def _noop(*args, **kwargs):
+                logging.getLogger(__name__).warning(
+                    "Fallback status_monitor noop called: %s", name
+                )
+                return None
+
+            return _noop
+
+    status_monitor = _FallbackStatusMonitor()
 
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -43,24 +59,33 @@ def cleanup_mongo_lock():
 def manage_mongo_lock():
     """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה עם יציאה נקייה."""
     pid = os.getpid()
-    now = datetime.now(timezone.utc)  # 'now' הוא מודע לאזור זמן (aware)
+    now = datetime.now(timezone.utc)
 
     lock = db.db.locks.find_one({"_id": LOCK_ID})
     if lock:
-        lock_time = lock.get("timestamp", now)  # 'lock_time' מגיע מה-DB והוא תמים (naive)
-
-        # --- התיקון נמצא כאן ---
-        # אם התאריך מה-DB הוא 'תמים', אנחנו הופכים אותו ל'מודע' עם אזור זמן UTC
-        if lock_time.tzinfo is None:
+        lock_time = lock.get("timestamp", now)
+        if getattr(lock_time, "tzinfo", None) is None:
             lock_time = lock_time.replace(tzinfo=timezone.utc)
 
-        # עכשיו שני התאריכים מודעים וניתן לבצע חישוב
-        if (now - lock_time) > timedelta(hours=1):
-            print(f"WARNING: Found stale MongoDB lock from {lock_time}. Overwriting.")
-            db.db.locks.delete_one({"_id": LOCK_ID})
-        else:
-            print("INFO: Lock document in MongoDB exists. Another instance is running. Exiting gracefully.")
+        # אם הנעילה טרייה יחסית — נצא; אם ישנה — נדרוס
+        if (now - lock_time) <= timedelta(minutes=10):
+            print("INFO: Lock exists and is recent. Another instance likely running. Exiting.")
             sys.exit(0)
+        # נסיון לזהות נעילה ישנה אך עדיין יש מופע פעיל באוויר באמצעות pid
+        other_pid = lock.get("pid")
+        if other_pid and other_pid != pid:
+            try:
+                # ב־Linux, os.kill(pid, 0) בודקת קיום תהליך בלי להרוג
+                import signal
+
+                os.kill(int(other_pid), 0)
+                # אם לא זרק — התהליך עדיין חי; נצא
+                print("INFO: Existing process seems alive. Exiting.")
+                sys.exit(0)
+            except Exception:
+                # אין תהליך — נמחק נעילה
+                print(f"WARNING: Found stale MongoDB lock from {lock_time} with dead pid {other_pid}. Overwriting.")
+                db.db.locks.delete_one({"_id": LOCK_ID})
 
     try:
         db.db.locks.insert_one({"_id": LOCK_ID, "pid": pid, "timestamp": now})
@@ -142,6 +167,7 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("resume", self.resume_command))
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
+        self.app.add_handler(CommandHandler("diag", self.diag_command))
 
         # Monitor commands
         self.app.add_handler(CommandHandler("monitor", self.monitor_command))
@@ -205,6 +231,7 @@ class RenderMonitorBot:
 /list_monitored - רשימת שירותים בניטור סטטוס
 /test_monitor [service_id] [action] - בדיקת התראות
 /clear_test_data - ניקוי נתוני בדיקות
+/diag - דיאגנוסטיקה מהירה
 
 /help - הצגת הודעה זו
         """
@@ -212,6 +239,28 @@ class RenderMonitorBot:
         if msg is None:
             return
         await msg.reply_text(help_text, parse_mode="Markdown")
+
+    async def diag_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מציג דיאגנוסטיקה מהירה של מצב הניטור וההתראות"""
+        msg = update.message
+        if msg is None:
+            return
+        try:
+            from database import db
+
+            monitored = db.get_status_monitored_services()
+            deploy_enabled = db.get_services_with_deploy_notifications_enabled()
+
+            message = "🛠️ *דיאגנוסטיקה מהירה*\n\n"
+            message += f"🔁 ניטור רץ: {'כן' if (status_monitor.monitoring_thread and status_monitor.monitoring_thread.is_alive()) else 'לא'}\n"
+            message += f"⏱️ מרווח בדיקה: {status_monitor.deploy_check_interval if status_monitor.deploying_active else status_monitor.check_interval}s\n"
+            message += f"👁️ שירותים בניטור סטטוס: {len(monitored)}\n"
+            message += f"🚀 שירותים עם התראות דיפלוי: {len(deploy_enabled)}\n"
+            if not monitored and not deploy_enabled and not config.SERVICES_TO_MONITOR:
+                message += "⚠️ אין שירותים לבדיקה (DB ריק ואין SERVICES_TO_MONITOR)\n"
+            await msg.reply_text(message, parse_mode="Markdown")
+        except Exception as e:
+            await msg.reply_text(f"❌ כשל בדיאגנוסטיקה: {e}")
 
     async def monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הפעלת ניטור סטטוס לשירות"""
@@ -231,6 +280,11 @@ class RenderMonitorBot:
         # הפעלת הניטור
         if status_monitor.enable_monitoring(service_id, user_id):
             await msg.reply_text(f"✅ ניטור סטטוס הופעל עבור השירות {service_id}\n" f"תקבל התראות כשהשירות יעלה או ירד.")
+            # ודא שהלולאת ניטור רצה גם אם כובהה בקובץ ההגדרות
+            try:
+                status_monitor.start_monitoring()
+            except Exception:
+                pass
         else:
             await msg.reply_text(f"❌ לא הצלחתי להפעיל ניטור עבור {service_id}\n" f"ודא שה-ID נכון ושהשירות קיים ב-Render.")
 
@@ -456,6 +510,11 @@ class RenderMonitorBot:
 
             if result["success"]:
                 messages.append(f"✅ {service_name} - הוחזר לפעילות")
+                # התחלת מעקב אקטיבי אחר דיפלוי בעקבות ההפעלה
+                try:
+                    status_monitor.watch_deploy_until_terminal(service_id, service_name)
+                except Exception:
+                    pass
             else:
                 messages.append(f"❌ {service_name} - כשלון: {result['message']}")
 
@@ -660,6 +719,13 @@ class RenderMonitorBot:
                 self.render_api.resume_service(service_id)
                 self.db.update_service_activity(service_id, status="active")
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
+                # התחלת מעקב אקטיבי אחר דיפלוי בעקבות ההפעלה
+                try:
+                    service = self.db.get_service_activity(service_id) or {}
+                    service_name = service.get("service_name", service_id)
+                    status_monitor.watch_deploy_until_terminal(service_id, service_name)
+                except Exception:
+                    pass
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
         elif data == "back_to_manage":  # מטפל בכפתור "חזור"
@@ -812,6 +878,11 @@ class RenderMonitorBot:
             await query.answer("🚀 התראות דיפלוי הופעלו בהצלחה!", show_alert=True)
             # רענון התצוגה ללא שינוי query.data
             await self.monitor_detail_callback(update, context, service_id_override=service_id)
+            # הפעל לולאת ניטור אם לא רצה כדי שנאתר אירועי דיפלוי
+            try:
+                status_monitor.start_monitoring()
+            except Exception:
+                pass
 
         elif data.startswith("disable_deploy_notif_"):
             service_id = data.replace("disable_deploy_notif_", "")
@@ -1024,10 +1095,14 @@ class RenderMonitorBot:
             emoji = "🟢" if new_status == "online" else "🔴" if new_status == "offline" else "🟡"
             test_message = f"{emoji} *התראת בדיקה - שינוי סטטוס*\n\n"
             test_message += "🧪 זוהי הודעת בדיקה!\n\n"
-            test_message += f"🤖 השירות: *{service_name}*\n"
-            test_message += f"🆔 ID: `{service_id}`\n"
-            test_message += f"⬅️ סטטוס קודם: {old_status}\n"
-            test_message += f"➡️ סטטוס חדש: {new_status}\n"
+            safe_name = str(service_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+            safe_id = str(service_id).replace("`", "\\`")
+            safe_old = str(old_status).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+            safe_new = str(new_status).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+            test_message += f"🤖 השירות: *{safe_name}*\n"
+            test_message += f"🆔 ID: `{safe_id}`\n"
+            test_message += f"⬅️ סטטוס קודם: {safe_old}\n"
+            test_message += f"➡️ סטטוס חדש: {safe_new}\n"
             send_notification(test_message)
 
 
@@ -1036,9 +1111,14 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """לוכד את כל השגיאות ושולח אותן ללוג."""
     logger = logging.getLogger(__name__)
     if isinstance(context.error, Conflict):
-        # מתמודד עם שגיאת הקונפליקט הנפוצה בשקט יחסי
-        logger.warning("⚠️ Conflict error detected, likely another bot instance is running. Ignoring.")
-        return  # יוצאים מהפונקציה כדי לא להדפיס את כל השגיאה הארוכה
+        # יש מופע נוסף שרץ עם אותו token. כדי למנוע ריקות/בלגן — נסגור את התהליך הנוכחי
+        logger.warning("⚠️ Conflict error detected: another bot instance is running. Exiting this instance.")
+        try:
+            # נסיון לשחרר נעילה לפני יציאה שקטה
+            db.db.locks.delete_one({"_id": LOCK_ID})
+        except Exception:
+            pass
+        sys.exit(0)
 
     # עבור כל שגיאה אחרת, מדפיסים את המידע המלא
     logging.error("❌ Exception while handling an update:", exc_info=context.error)
@@ -1064,21 +1144,22 @@ def main():
 
     # בדיקת הגדרות חיוניות
     # nosec B105 - placeholder in config for local development, not a secret
+    fatal = False
     if not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "your_telegram_bot_token_here":  # nosec B105
         print("❌ חסר TELEGRAM_BOT_TOKEN בקובץ .env")
-        return
+        fatal = True
 
     if not config.ADMIN_CHAT_ID or config.ADMIN_CHAT_ID == "your_admin_chat_id_here":
         print("❌ חסר ADMIN_CHAT_ID בקובץ .env")
-        return
+        fatal = True
 
     if not config.RENDER_API_KEY or config.RENDER_API_KEY == "your_render_api_key_here":
         print("❌ חסר RENDER_API_KEY בקובץ .env")
-        return
+        fatal = True
 
-    if not config.SERVICES_TO_MONITOR:
-        print("❌ לא מוגדרים שירותים לניטור ב-config.py")
-        return
+    if fatal:
+        # נמשיך להריץ כדי שהבוט ינסה להדפיס עוד דיאגנוסטיקות/לוגים
+        print("⚠️ ממשיך לרוץ במצב דיאגנוסטיקה למרות חסרים בהגדרות…")
 
     # יצירת בוט
     bot = RenderMonitorBot()
@@ -1088,17 +1169,41 @@ def main():
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
 
-    # הפעלת ניטור סטטוס אם מופעל בהגדרות
-    if config.STATUS_MONITORING_ENABLED:
+    # הפעלת ניטור סטטוס תמידית; אם לא רוצים — ניתן לכבות ע"י אי-הפעלת שירותים
+    try:
         status_monitor.start_monitoring()
         print("✅ ניטור סטטוס הופעל")
+    except Exception as e:
+        print(f"❌ שגיאה בהפעלת ניטור סטטוס: {e}")
 
     # שליחת התראת הפעלה
-    send_startup_notification()
+    try:
+        send_startup_notification()
+    except Exception as e:
+        print(f"⚠️ לא הצלחתי לשלוח התראת הפעלה: {e}")
 
     # בדיקה ראשונית
     print("מבצע בדיקה ראשונית...")
-    activity_tracker.check_inactive_services()
+    try:
+        activity_tracker.check_inactive_services()
+    except Exception as e:
+        print(f"⚠️ שגיאה בבדיקה ראשונית: {e}")
+
+    # דיאגנוסטיקה אוטומטית בהפעלה
+    if getattr(config, "DIAG_ON_START", False):
+        try:
+            from database import db
+
+            monitored = db.get_status_monitored_services()
+            deploy_enabled = db.get_services_with_deploy_notifications_enabled()
+            print("=== DIAG ON START ===")
+            print(f"Monitor thread alive: {bool(status_monitor.monitoring_thread and status_monitor.monitoring_thread.is_alive())}")
+            print(f"Check interval: {status_monitor.deploy_check_interval if status_monitor.deploying_active else status_monitor.check_interval}s")
+            print(f"Monitored services: {len(monitored)} | Deploy alerts: {len(deploy_enabled)}")
+            print(f"SERVICES_TO_MONITOR fallback: {len(getattr(config, 'SERVICES_TO_MONITOR', []))}")
+            print("======================")
+        except Exception as e:
+            print(f"⚠️ DIAG_ON_START failed: {e}")
 
     print("✅ הבוט פועל! לחץ Ctrl+C להפסקה")
 

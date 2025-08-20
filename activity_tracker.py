@@ -154,6 +154,13 @@ class ActivityTracker:
 
             send_notification(message)
             print(f"שירות {service_name} הוחזר לפעילות בהצלחה")
+            # התחלת מעקב אקטיבי אחר דיפלוי בעקבות ההפעלה
+            try:
+                from status_monitor import status_monitor
+
+                status_monitor.watch_deploy_until_terminal(service_id, service_name)
+            except Exception:
+                pass
         else:
             # שליחת התראה על כשלון
             message = "❌ כשלון בהחזרה לפעילות\n"

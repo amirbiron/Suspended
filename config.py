@@ -39,5 +39,8 @@ STATUS_MONITORING_ENABLED = os.getenv("STATUS_MONITORING_ENABLED", "true").lower
 # New: while any service is deploying, poll faster to catch transitions
 DEPLOY_CHECK_INTERVAL_SECONDS = int(os.getenv("DEPLOY_CHECK_INTERVAL_SECONDS", "30"))
 
+# דיאגנוסטיקה בהפעלה
+DIAG_ON_START = os.getenv("DIAG_ON_START", "false").lower() == "true"
+
 # הגדרות כלליות
 TIMEZONE = "Asia/Jerusalem"

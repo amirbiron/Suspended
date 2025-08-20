@@ -214,7 +214,12 @@ class Database:
 
     def toggle_deploy_notifications(self, service_id: str, enabled: bool):
         """הפעלה/כיבוי התראות דיפלוי לשירות ספציפי"""
-        return self.services.update_one({"_id": service_id}, {"$set": {"deploy_notifications_enabled": enabled}})
+        # ודא שהמסמך קיים כדי ששירותים שלא נרשמו מראש לא יידלגו בסריקה
+        return self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"deploy_notifications_enabled": enabled}, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
 
     def get_deploy_notification_status(self, service_id: str):
         """קבלת סטטוס התראות דיפלוי לשירות"""
