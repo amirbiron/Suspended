@@ -110,11 +110,12 @@ class StatusMonitor:
 
                     if status_monitoring_enabled and not manual_skip:
                         self._process_status_change(service_id, current_status, service_doc)
-                    # בדיקת דיפלוי שהסתיים: אם התראות דיפלוי מופעלות
-                    if deploy_notif_enabled:
-                        self._check_deploy_events(service_id, service_doc)
                 else:
                     logger.warning(f"Could not get status for service {service_id}")
+
+                # בדיקת דיפלוי שהסתיים: אם התראות דיפלוי מופעלות
+                if deploy_notif_enabled:
+                    self._check_deploy_events(service_id, service_doc)
 
             except Exception as e:
                 logger.error(f"Error checking status for {service_id}: {e}")

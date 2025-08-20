@@ -231,6 +231,11 @@ class RenderMonitorBot:
         # הפעלת הניטור
         if status_monitor.enable_monitoring(service_id, user_id):
             await msg.reply_text(f"✅ ניטור סטטוס הופעל עבור השירות {service_id}\n" f"תקבל התראות כשהשירות יעלה או ירד.")
+            # ודא שהלולאת ניטור רצה גם אם כובהה בקובץ ההגדרות
+            try:
+                status_monitor.start_monitoring()
+            except Exception:
+                pass
         else:
             await msg.reply_text(f"❌ לא הצלחתי להפעיל ניטור עבור {service_id}\n" f"ודא שה-ID נכון ושהשירות קיים ב-Render.")
 
@@ -812,6 +817,11 @@ class RenderMonitorBot:
             await query.answer("🚀 התראות דיפלוי הופעלו בהצלחה!", show_alert=True)
             # רענון התצוגה ללא שינוי query.data
             await self.monitor_detail_callback(update, context, service_id_override=service_id)
+            # הפעל לולאת ניטור אם לא רצה כדי שנאתר אירועי דיפלוי
+            try:
+                status_monitor.start_monitoring()
+            except Exception:
+                pass
 
         elif data.startswith("disable_deploy_notif_"):
             service_id = data.replace("disable_deploy_notif_", "")
@@ -1024,10 +1034,14 @@ class RenderMonitorBot:
             emoji = "🟢" if new_status == "online" else "🔴" if new_status == "offline" else "🟡"
             test_message = f"{emoji} *התראת בדיקה - שינוי סטטוס*\n\n"
             test_message += "🧪 זוהי הודעת בדיקה!\n\n"
-            test_message += f"🤖 השירות: *{service_name}*\n"
-            test_message += f"🆔 ID: `{service_id}`\n"
-            test_message += f"⬅️ סטטוס קודם: {old_status}\n"
-            test_message += f"➡️ סטטוס חדש: {new_status}\n"
+            safe_name = str(service_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+            safe_id = str(service_id).replace("`", "\\`")
+            safe_old = str(old_status).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+            safe_new = str(new_status).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+            test_message += f"🤖 השירות: *{safe_name}*\n"
+            test_message += f"🆔 ID: `{safe_id}`\n"
+            test_message += f"⬅️ סטטוס קודם: {safe_old}\n"
+            test_message += f"➡️ סטטוס חדש: {safe_new}\n"
             send_notification(test_message)
 
 

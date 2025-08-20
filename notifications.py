@@ -25,12 +25,25 @@ def send_notification(message: str):
 
     try:
         response = requests.post(url, json=payload, timeout=15)
-        if response.status_code == 200:
-            print("✅ התראה נשלחה בהצלחה")
-            return True
-        else:
+        if response.status_code != 200:
             print(f"❌ כשלון בשליחת התראה: {response.status_code} - {response.text}")
             return False
+
+        # Telegram API מחזיר 200 גם במקרה של שגיאה לוגית, יש לבדוק את השדה 'ok'
+        try:
+            data = response.json()
+        except Exception:
+            print("❌ תגובת טלגרם אינה JSON תקין")
+            return False
+
+        if bool(data.get("ok")):
+            print("✅ התראה נשלחה בהצלחה")
+            return True
+
+        # לא נשלח בפועל – הדפס תאור השגיאה
+        description = data.get("description") or data
+        print(f"❌ טלגרם דחה את ההודעה: {description}")
+        return False
     except requests.RequestException as e:
         print(f"❌ שגיאה בשליחת התראה: {str(e)}")
         return False
@@ -41,13 +54,19 @@ def send_status_change_notification(
 ):
     """שליחת התראה על שינוי סטטוס של שירות"""
     message = f"{emoji} *התראת שינוי סטטוס*\n\n"
-    message += f"🤖 השירות: *{service_name}*\n"
+    # Escape כדי למנוע כשלי Markdown בעת שליחת הודעה לטלגרם
+    safe_service_name = str(service_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+    safe_action = str(action).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+    safe_old_status = str(old_status).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+    safe_new_status = str(new_status).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+
+    message += f"🤖 השירות: *{safe_service_name}*\n"
     # בטלגרם backticks יכולים לשבור Markdown אם יש תווים מיוחדים ב-ID, נחליף backtick חזרה
     safe_service_id = str(service_id).replace("`", "\\`")
     message += f"🆔 ID: `{safe_service_id}`\n"
-    message += f"📊 הפעולה: {action}\n"
-    message += f"⬅️ סטטוס קודם: {old_status}\n"
-    message += f"➡️ סטטוס חדש: {new_status}\n\n"
+    message += f"📊 הפעולה: {safe_action}\n"
+    message += f"⬅️ סטטוס קודם: {safe_old_status}\n"
+    message += f"➡️ סטטוס חדש: {safe_new_status}\n\n"
 
     # הוספת הסבר למשמעות
     if new_status == "online":
