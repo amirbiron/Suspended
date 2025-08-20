@@ -1,6 +1,6 @@
 import requests
 import config
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 class RenderAPI:
     def __init__(self):
@@ -76,6 +76,57 @@ class RenderAPI:
             if latest and isinstance(latest, dict):
                 return latest.get("status") or latest.get("state")
             return None
+        except requests.RequestException:
+            return None
+
+    def get_latest_deploy_info(self, service_id: str) -> Optional[Dict[str, Any]]:
+        """מחזיר מידע מפורט על הדיפלוי האחרון של שירות
+
+        מחזיר מילון עם שדות עיקריים: id, status/state, createdAt, updatedAt/finishedAt, commitMessage/commitId
+        """
+        url = f"{self.base_url}/services/{service_id}/deploys?limit=1"
+        try:
+            response = requests.get(url, headers=self.headers)
+            if response.status_code != 200:
+                return None
+            data = response.json()
+            if isinstance(data, list):
+                latest = data[0] if data else None
+            else:
+                items = data.get("items") or data.get("data") or []
+                latest = items[0] if items else None
+            if not latest or not isinstance(latest, dict):
+                return None
+            deploy_id = latest.get("id") or latest.get("deployId")
+            status = latest.get("status") or latest.get("state")
+            created_at = latest.get("createdAt") or latest.get("created_at")
+            updated_at = (
+                latest.get("updatedAt")
+                or latest.get("finishedAt")
+                or latest.get("completedAt")
+                or latest.get("updated_at")
+            )
+            # חלק מהשדות עשויים להיות מקוננים
+            commit_message = None
+            commit_id = None
+            commit = latest.get("commit") or {}
+            if isinstance(commit, dict):
+                commit_message = commit.get("message") or commit.get("title")
+                commit_id = commit.get("id") or commit.get("sha")
+            else:
+                # נסיון חלופי
+                commit_message = latest.get("commitMessage") or latest.get("message")
+                commit_id = latest.get("commitId") or latest.get("commit")
+
+            return {
+                "id": deploy_id,
+                "status": status,
+                "createdAt": created_at,
+                "updatedAt": updated_at,
+                "commitMessage": commit_message,
+                "commitId": commit_id,
+                "raw": latest,
+            }
         except requests.RequestException:
             return None
     

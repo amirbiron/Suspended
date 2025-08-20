@@ -63,6 +63,24 @@ def send_startup_notification():
     message = "🚀 בוט ניטור Render הופעל בהצלחה"
     send_notification(message)
 
+def send_deploy_event_notification(service_name: str, service_id: str, status: str, commit_message: str = None):
+    """התראה ממוקדת על דיפלוי שהסתיים (סיום/כשלון)"""
+    emoji = "🚀" if str(status).lower() in ["succeeded", "success", "completed", "deployed", "live"] else "⚠️"
+    title = "סיום פריסה מוצלח" if emoji == "🚀" else "כשלון בפריסה"
+    safe_service_id = str(service_id).replace('`', '\\`')
+    safe_service_name = str(service_name).replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
+    message = f"{emoji} *{title}*\n\n"
+    message += f"🤖 השירות: *{safe_service_name}*\n"
+    message += f"🆔 ID: `{safe_service_id}`\n"
+    message += f"סטטוס דיפלוי: {status}\n"
+    if commit_message:
+        # חיתוך כדי לא לשבור הודעות ארוכות במיוחד
+        trimmed = commit_message.strip().replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
+        if len(trimmed) > 200:
+            trimmed = trimmed[:197] + "..."
+        message += f"📝 Commit: {trimmed}\n"
+    return send_notification(message)
+
 def send_daily_report():
     """דוח יומי על מצב השירותים"""
     from database import db
