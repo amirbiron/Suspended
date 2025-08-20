@@ -1128,21 +1128,22 @@ def main():
 
     # בדיקת הגדרות חיוניות
     # nosec B105 - placeholder in config for local development, not a secret
+    fatal = False
     if not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "your_telegram_bot_token_here":  # nosec B105
         print("❌ חסר TELEGRAM_BOT_TOKEN בקובץ .env")
-        return
+        fatal = True
 
     if not config.ADMIN_CHAT_ID or config.ADMIN_CHAT_ID == "your_admin_chat_id_here":
         print("❌ חסר ADMIN_CHAT_ID בקובץ .env")
-        return
+        fatal = True
 
     if not config.RENDER_API_KEY or config.RENDER_API_KEY == "your_render_api_key_here":
         print("❌ חסר RENDER_API_KEY בקובץ .env")
-        return
+        fatal = True
 
-    if not config.SERVICES_TO_MONITOR:
-        print("❌ לא מוגדרים שירותים לניטור ב-config.py")
-        return
+    if fatal:
+        # נמשיך להריץ כדי שהבוט ינסה להדפיס עוד דיאגנוסטיקות/לוגים
+        print("⚠️ ממשיך לרוץ במצב דיאגנוסטיקה למרות חסרים בהגדרות…")
 
     # יצירת בוט
     bot = RenderMonitorBot()
