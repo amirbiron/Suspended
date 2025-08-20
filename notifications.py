@@ -80,7 +80,9 @@ def send_deploy_event_notification(
     message = f"{emoji} *{title}*\n\n"
     message += f"🤖 השירות: *{safe_service_name}*\n"
     message += f"🆔 ID: `{safe_service_id}`\n"
-    message += f"סטטוס דיפלוי: {status}\n"
+    # הימנעות משבירת Markdown ע"י תווים מיוחדים בסטטוס
+    safe_status = str(status).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+    message += f"סטטוס דיפלוי: {safe_status}\n"
     if commit_message:
         # חיתוך כדי לא לשבור הודעות ארוכות במיוחד
         trimmed = commit_message.strip().replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
