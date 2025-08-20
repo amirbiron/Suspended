@@ -159,8 +159,16 @@ class StatusMonitor:
             if status in terminal_statuses or simplified in {"online", "offline"}:
                 service_name = service_doc.get("service_name", service_id)
                 commit_message = info.get("commitMessage")
-                send_deploy_event_notification(service_name, service_id, status, commit_message)
-                db.record_reported_deploy(service_id, deploy_id, status)
+                sent = send_deploy_event_notification(service_name, service_id, status, commit_message)
+                if sent:
+                    db.record_reported_deploy(service_id, deploy_id, status)
+                else:
+                    logger.warning(
+                        "Deploy notification failed to send for %s (deploy_id=%s, status=%s); will retry next cycle",
+                        service_id,
+                        deploy_id,
+                        status,
+                    )
         except Exception as e:
             logger.error(f"Error while checking deploy events for {service_id}: {e}")
 

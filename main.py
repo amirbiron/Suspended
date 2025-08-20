@@ -1068,6 +1068,10 @@ def main():
         print("❌ חסר TELEGRAM_BOT_TOKEN בקובץ .env")
         return
 
+    if not config.ADMIN_CHAT_ID or config.ADMIN_CHAT_ID == "your_admin_chat_id_here":
+        print("❌ חסר ADMIN_CHAT_ID בקובץ .env")
+        return
+
     if not config.RENDER_API_KEY or config.RENDER_API_KEY == "your_render_api_key_here":
         print("❌ חסר RENDER_API_KEY בקובץ .env")
         return
