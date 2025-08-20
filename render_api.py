@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional, cast
+from datetime import datetime
 
 import requests
 
@@ -82,11 +83,33 @@ class RenderAPI:
             if response.status_code != 200:
                 return None
             data = cast(Any, response.json())
+            # תקן: בחר את הדיפלוי העדכני לפי updatedAt/finishedAt/createdAt במקום להניח סדר
+            def parse_iso(ts: Optional[str]) -> Optional[datetime]:
+                if not ts or not isinstance(ts, str):
+                    return None
+                try:
+                    if ts.endswith("Z"):
+                        ts = ts.replace("Z", "+00:00")
+                    return datetime.fromisoformat(ts)
+                except Exception:
+                    return None
+
+            items_list: List[Dict[str, Any]]
             if isinstance(data, list):
-                latest = data[0] if data else None
+                items_list = cast(List[Dict[str, Any]], data)
             else:
-                items = cast(Any, data).get("items") or cast(Any, data).get("data") or []
-                latest = items[0] if items else None
+                items_list = cast(List[Dict[str, Any]], cast(Any, data).get("items") or cast(Any, data).get("data") or [])
+
+            latest = None
+            if items_list:
+                # מיין לפי updatedAt/finishedAt/completedAt/createdAt
+                def get_ts(itm: Dict[str, Any]) -> datetime:
+                    updated = cast(Optional[str], itm.get("updatedAt") or itm.get("finishedAt") or itm.get("completedAt"))
+                    created = cast(Optional[str], itm.get("createdAt") or itm.get("created_at"))
+                    parsed = parse_iso(updated) or parse_iso(created)
+                    return parsed or datetime.min
+
+                latest = sorted(items_list, key=get_ts, reverse=True)[0]
             if not latest or not isinstance(latest, dict):
                 return None
             deploy_id = latest.get("id") or latest.get("deployId")
