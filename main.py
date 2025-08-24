@@ -143,6 +143,7 @@ class RenderMonitorBot:
         commands = [
             BotCommand("start", "🚀 הפעלת הבוט"),
             BotCommand("status", "📊 סטטוס כל השירותים"),
+            BotCommand("plans", "💳 מידע על תוכנית ודיסק לכל שירות"),
             BotCommand("manage", "🎛️ ניהול שירותים"),
             BotCommand("monitor_manage", "👁️ ניהול ניטור סטטוס"),
             BotCommand("suspend", "⏸️ השעיית כל השירותים"),
@@ -277,7 +278,10 @@ class RenderMonitorBot:
                 disk_emoji = "💽" if has_disk else "—"
 
                 plan_display = plan_str or "לא ידוע"
-                lines.append(f"{status_emoji} *{name}*\n   ID: `{sid}`\n   תוכנית: {plan_display}\n   דיסק: {disk_emoji}\n")
+                kind_text = "חינמי" if is_free is True else ("בתשלום" if is_free is False else "לא ידוע")
+                lines.append(
+                    f"{status_emoji} *{name}*\n   ID: `{sid}`\n   תוכנית: {plan_display} ({kind_text})\n   דיסק: {disk_emoji}\n"
+                )
 
             await msg.reply_text("\n".join(lines), parse_mode="Markdown")
         except Exception as e:
