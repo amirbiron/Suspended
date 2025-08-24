@@ -166,6 +166,7 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("suspend", self.suspend_command))
         self.app.add_handler(CommandHandler("resume", self.resume_command))
         self.app.add_handler(CommandHandler("list_suspended", self.list_suspended_command))
+        self.app.add_handler(CommandHandler("plans", self.plans_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("diag", self.diag_command))
 
@@ -222,6 +223,7 @@ class RenderMonitorBot:
 /suspend - השעיית כל השירותים
 /resume - החזרת כל השירותים המושעים
 /list_suspended - רשימת שירותים מושעים
+/plans - מידע על תוכנית (חינמי/בתשלום) ודיסק מחובר
 /manage - ניהול שירותים עם כפתורים
 
 *פקודות ניטור סטטוס:*
@@ -239,6 +241,47 @@ class RenderMonitorBot:
         if msg is None:
             return
         await msg.reply_text(help_text, parse_mode="Markdown")
+
+    async def plans_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מציג עבור כל שירות אם הוא בתוכנית חינמית/בתשלום והאם יש לו דיסק מחובר"""
+        msg = update.message
+        if msg is None:
+            return
+        try:
+            # רשימת שירותים חיים מה-API כדי לכלול גם שירותים שאינם במסד
+            services_live = self.render_api.list_services()
+            # רשימת דיסקים מה-API (אם הנתיב קיים)
+            disks = self.render_api.list_disks()
+            service_id_to_disks = {}
+            for d in disks:
+                sid = d.get("serviceId") or d.get("service_id") or d.get("service")
+                if sid:
+                    service_id_to_disks.setdefault(str(sid), []).append(d)
+
+            if not services_live:
+                await msg.reply_text("לא נמצאו שירותים מה-Render API")
+                return
+
+            lines = ["💳 *מידע תוכניות ודיסקים*\n"]
+            for svc in services_live:
+                sid = str(svc.get("id") or svc.get("serviceId") or svc.get("_id") or "?")
+                name = str(svc.get("name") or svc.get("serviceName") or svc.get("slug") or sid)
+                plan_str = self.render_api.get_service_plan_string(svc)
+                is_free = self.render_api.is_free_plan(plan_str)
+
+                # נזהה דיסק לפי רשימת הדיסקים, ואם ריק ננסה לזהות מתוך השירות עצמו
+                disk_list = service_id_to_disks.get(sid, [])
+                has_disk = bool(disk_list) or self.render_api.service_has_disk(svc)
+
+                status_emoji = "🆓" if is_free is True else ("💰" if is_free is False else "❔")
+                disk_emoji = "💽" if has_disk else "—"
+
+                plan_display = plan_str or "לא ידוע"
+                lines.append(f"{status_emoji} *{name}*\n   ID: `{sid}`\n   תוכנית: {plan_display}\n   דיסק: {disk_emoji}\n")
+
+            await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+        except Exception as e:
+            await msg.reply_text(f"❌ כשל בקבלת מידע תוכניות/דיסקים: {e}")
 
     async def diag_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מציג דיאגנוסטיקה מהירה של מצב הניטור וההתראות"""

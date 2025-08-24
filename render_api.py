@@ -215,6 +215,115 @@ class RenderAPI:
 		services = self.list_services()
 		return [service for service in services if service.get("status") == "suspended" or service.get("suspended") is True]
 
+	# ===== מידע על דיסקים ותוכניות תמחור =====
+
+	def list_disks(self) -> List[Dict[str, Any]]:
+		"""מחזיר רשימת דיסקים (Persistent Disks) אם נתמכים ב-API
+
+		החזרה: רשימה של אובייקטים עם שדות כגון: id, serviceId, sizeGB, mountPath.
+		במקרה של תקלה או אם ה-API אינו זמין - מוחזרת רשימה ריקה.
+		"""
+		url = f"{self.base_url}/disks"
+		try:
+			response = requests.get(url, headers=self.headers, timeout=15)
+			if response.status_code == 200:
+				data = response.json()
+				if isinstance(data, list):
+					return cast(List[Dict[str, Any]], data)
+				items = cast(Any, data).get("items") or cast(Any, data).get("data")
+				if isinstance(items, list):
+					return cast(List[Dict[str, Any]], items)
+			return []
+		except requests.RequestException:
+			return []
+
+	def service_has_disk(self, service: Dict[str, Any]) -> bool:
+		"""נסה לזהות אם לשירות יש דיסק קבוע לפי מבנה ה-JSON.
+
+		בודק שדות אפשריים: disk, disks, persistentDisk, volumes וכן תחת serviceDetails/spec/details.
+		"""
+		candidates: List[Any] = []
+		for key in ("disk", "disks", "persistentDisk", "volumes"):
+			val = service.get(key)
+			if val is not None:
+				candidates.append(val)
+		service_details = cast(Optional[Dict[str, Any]], service.get("serviceDetails"))
+		if isinstance(service_details, dict):
+			for key in ("disk", "disks", "persistentDisk", "volumes"):
+				val = service_details.get(key)
+				if val is not None:
+					candidates.append(val)
+		for path in (("spec", "disk"), ("spec", "disks"), ("details", "disk"), ("details", "disks")):
+			val2 = self._extract_nested(service, *path)
+			if val2 is not None:
+				candidates.append(val2)
+
+		for cand in candidates:
+			# אם זו רשימה של דיסקים
+			if isinstance(cand, list) and len(cand) > 0:
+				return True
+			# אם זה מילון שמכיל mountPath/sizeGB
+			if isinstance(cand, dict) and ("mountPath" in cand or "sizeGB" in cand or "size" in cand):
+				return True
+			# מחרוזת לא מספיקה לזיהוי
+		return False
+
+	def _extract_nested(self, data: Dict[str, Any], *keys: str) -> Optional[Any]:
+		"""עוזר: מחלץ מפתח מקונן אם קיים (לפי רצף מפתחות)."""
+		current: Any = data
+		for key in keys:
+			if not isinstance(current, dict):
+				return None
+			current = current.get(key)
+		return cast(Optional[Any], current)
+
+	def get_service_plan_string(self, service: Dict[str, Any]) -> Optional[str]:
+		"""מנסה להפיק את שם התוכנית/תמחור של השירות מתוך אובייקט השירות.
+
+		בודק שדות אפשריים שונים כדי להיות חסין לשינויים ב-API: plan, tier, instanceType, וכן
+		תחת serviceDetails.* אם קיים.
+		"""
+		candidates: List[Optional[str]] = []
+		for key in ("plan", "tier", "instanceType"):
+			val = service.get(key)
+			if isinstance(val, str) and val.strip():
+				candidates.append(val)
+		# בדיקה תחת serviceDetails
+		service_details = cast(Optional[Dict[str, Any]], service.get("serviceDetails"))
+		if isinstance(service_details, dict):
+			for key in ("plan", "tier", "instanceType"):
+				val = service_details.get(key)
+				if isinstance(val, str) and val.strip():
+					candidates.append(val)
+
+		# נסה גם תחת spec/details אם קיים
+		for path in (("spec", "plan"), ("spec", "tier"), ("details", "plan"), ("details", "tier")):
+			val2 = self._extract_nested(service, *path)
+			if isinstance(val2, str) and val2.strip():
+				candidates.append(val2)
+
+		for c in candidates:
+			lower = c.lower()
+			# נקה ערכים נפוצים
+			if any(k in lower for k in ["free", "starter", "standard", "pro", "plus"]):
+				return c
+		# אם לא זוהה מפתח ברור אך יש ערך כלשהו, החזר ראשון
+		return candidates[0] if candidates else None
+
+	def is_free_plan(self, plan: Optional[str]) -> Optional[bool]:
+		"""קובע אם התוכנית היא חינמית על בסיס שם התוכנית.
+
+		מחזיר True אם מזוהה 'free', False אם מזוהה תוכנית אחרת מוכרת, None אם לא ידוע.
+		"""
+		if not plan or not isinstance(plan, str):
+			return None
+		lower = plan.lower().strip()
+		if "free" in lower:
+			return True
+		if any(k in lower for k in ["starter", "standard", "pro", "plus", "team", "business", "enterprise"]):
+			return False
+		return None
+
 
 # יצירת instance גלובלי
 render_api = RenderAPI()
