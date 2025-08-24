@@ -204,9 +204,42 @@ class RenderAPI:
 
 		try:
 			response = requests.get(url, headers=self.headers, timeout=15)
-			if response.status_code == 200:
-				return cast(List[Dict[str, Any]], response.json())
-			return []
+			if response.status_code != 200:
+				return []
+
+			data = response.json()
+			services: List[Dict[str, Any]] = []
+
+			def _as_service(entity: Any) -> None:
+				"""הוספת ישות כשירות לאחר הסרה של שכבת עטיפה אם קיימת"""
+				if not isinstance(entity, dict):
+					return
+				obj: Any = entity
+				# פריסה אם יש מפתח "service" שמכיל את האובייקט בפועל
+				inner = obj.get("service") if isinstance(obj.get("service"), dict) else None
+				if inner:
+					obj = inner
+
+				# אם זה נראה כמו אובייקט שירות, הוסף
+				if isinstance(obj, dict):
+					services.append(cast(Dict[str, Any], obj))
+
+			# טיפול במבנים שונים שמוחזרים מה-API
+			if isinstance(data, list):
+				for item in data:
+					_as_service(item)
+			elif isinstance(data, dict):
+				for key in ("items", "data", "services", "result", "list"):
+					val = data.get(key)
+					if isinstance(val, list):
+						for item in val:
+							_as_service(item)
+						break
+				else:
+					# ייתכן שזה אובייקט יחיד של שירות
+					_as_service(data)
+
+			return services
 		except requests.RequestException:
 			return []
 

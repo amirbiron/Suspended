@@ -265,14 +265,52 @@ class RenderMonitorBot:
 
             lines = ["💳 *מידע תוכניות ודיסקים*\n"]
             for svc in services_live:
-                sid = str(svc.get("id") or svc.get("serviceId") or svc.get("_id") or "?")
-                name = str(svc.get("name") or svc.get("serviceName") or svc.get("slug") or sid)
+                sid = str(
+                    svc.get("id")
+                    or svc.get("serviceId")
+                    or svc.get("_id")
+                    or svc.get("uuid")
+                    or "?"
+                )
+
+                name = str(
+                    svc.get("name")
+                    or svc.get("serviceName")
+                    or svc.get("slug")
+                    or svc.get("displayName")
+                    or sid
+                )
+
                 plan_str = self.render_api.get_service_plan_string(svc)
                 is_free = self.render_api.is_free_plan(plan_str)
 
                 # נזהה דיסק לפי רשימת הדיסקים, ואם ריק ננסה לזהות מתוך השירות עצמו
                 disk_list = service_id_to_disks.get(sid, [])
                 has_disk = bool(disk_list) or self.render_api.service_has_disk(svc)
+
+                # נסה לקבל מידע מפורט אם לא זוהה מזהה/שם/תוכנית
+                if (not plan_str or is_free is None) or (name == sid or name == "?"):
+                    try:
+                        if sid and sid != "?":
+                            svc_info = self.render_api.get_service_info(sid)
+                            if isinstance(svc_info, dict) and svc_info:
+                                # עדכון שם אם חסר
+                                if name == sid or name == "?":
+                                    name = str(
+                                        svc_info.get("name")
+                                        or svc_info.get("serviceName")
+                                        or svc_info.get("slug")
+                                        or name
+                                    )
+                                # עדכון תוכנית
+                                if not plan_str or is_free is None:
+                                    plan_str = self.render_api.get_service_plan_string(svc_info) or plan_str
+                                    is_free = self.render_api.is_free_plan(plan_str)
+                                # עדכון מידע דיסק אם עדיין לא זוהה
+                                if not has_disk:
+                                    has_disk = self.render_api.service_has_disk(svc_info)
+                    except Exception:
+                        pass
 
                 status_emoji = "🆓" if is_free is True else ("💰" if is_free is False else "❔")
                 disk_emoji = "💽" if has_disk else "—"
