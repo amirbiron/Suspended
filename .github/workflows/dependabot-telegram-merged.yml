@@ -1,0 +1,37 @@
+name: Notify Telegram on Dependabot merge
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    if: github.event.pull_request.merged == true && github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HTML_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Missing TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID secrets (skipping notification)";
+            exit 0;
+          fi
+          TITLE="📦 עדכון תלויות מוזג"
+          TEXT="${TITLE}\n\n📁 Repo: ${REPO}\n🔀 PR #${PR_NUMBER}: ${PR_TITLE}\n📌 Branch: ${BASE_REF}\n🔗 ${HTML_URL}"
+          # Escape Markdown meta characters
+          TEXT=$(echo -e "$TEXT" | sed 's/\*/\\*/g; s/_/\_/g; s/`/\`/g')
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "parse_mode=Markdown" \
+            --data-urlencode "text=${TEXT}"
