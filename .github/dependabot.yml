@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "05:00"
+      timezone: "Asia/Jerusalem"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(pip)"
+      include: "scope"
+    allow:
+      - dependency-type: "direct"
+    groups:
+      production-deps:
+        patterns:
+          - "*"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "04:30"
+      timezone: "Asia/Jerusalem"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(actions)"
+      include: "scope"
