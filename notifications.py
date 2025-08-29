@@ -115,8 +115,43 @@ def send_deploy_event_notification(
     commit_message: Optional[str] = None,
 ) -> bool:
     """התראה ממוקדת על דיפלוי שהסתיים (סיום/כשלון)"""
-    emoji = "🚀" if str(status).lower() in ["succeeded", "success", "completed", "deployed", "live"] else "⚠️"
-    title = "סיום פריסה מוצלח" if emoji == "🚀" else "כשלון בפריסה"
+    def _is_dependency_update_commit(msg: Optional[str]) -> bool:
+        if not msg or not isinstance(msg, str):
+            return False
+        text = msg.strip().lower()
+        # דגלים נפוצים של Dependabot/Renovate/עדכוני תלויות
+        patterns = [
+            "dependabot",
+            "renovate",
+            "chore(deps",
+            "build(deps",
+            "deps:",
+            "bump ",
+            "bump:",
+            "bump(",
+            "update dependency",
+            "update dependencies",
+            "upgrade dependency",
+            "upgrade dependencies",
+            "requirements.txt",
+            "pipfile",
+            "poetry.lock",
+            "pip-tools",
+            "pip-compile",
+            "security upgrade",
+        ]
+        return any(p in text for p in patterns)
+
+    success_states = {"succeeded", "success", "completed", "deployed", "live"}
+    is_success = str(status).lower() in success_states
+    is_deps_update = _is_dependency_update_commit(commit_message)
+
+    if is_deps_update:
+        emoji = ("📦🚀" if is_success else "📦⚠️")
+        title = "סיום עדכון תלויות" if is_success else "כשלון עדכון תלויות"
+    else:
+        emoji = "🚀" if is_success else "⚠️"
+        title = "סיום פריסה מוצלח" if is_success else "כשלון בפריסה"
     safe_service_id = str(service_id).replace("`", "\\`")
     safe_service_name = str(service_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
     message = f"{emoji} *{title}*\n\n"
@@ -131,6 +166,8 @@ def send_deploy_event_notification(
         if len(trimmed) > 200:
             trimmed = trimmed[:197] + "..."
         message += f"📝 Commit: {trimmed}\n"
+    if is_deps_update:
+        message += "📦 זוהה כעדכון תלויות על סמך הודעת ה-commit\n"
     # כותרת קצרה שמדגישה את שם השירות לשורה הראשונה
     short_title = f"{emoji} *{safe_service_name}* – {title}"
     sent_admin = bool(_send_to_chat(config.ADMIN_CHAT_ID, message, title=short_title))
