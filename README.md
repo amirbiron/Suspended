@@ -45,6 +45,7 @@ MONGODB_URI=your_mongodb_connection_string
 STATUS_MONITORING_ENABLED=true
 STATUS_CHECK_INTERVAL_SECONDS=300
 DEPLOY_CHECK_INTERVAL_SECONDS=30
+AUTO_SUSPEND_ENABLED=false
 ```
 
 ### 📨 התראות דיפלוי
@@ -87,6 +88,7 @@ python main.py
 INACTIVE_DAYS_ALERT = 3  # התראה אחרי כמה ימים
 AUTO_SUSPEND_DAYS = 7    # השעיה אוטומטית אחרי כמה ימים
 CHECK_INTERVAL_HOURS = 24  # תדירות בדיקה
+AUTO_SUSPEND_ENABLED = False  # כדי לבטל השעיה אוטומטית, השאר False
 ```
 
 ## 📊 מבנה מסד הנתונים
