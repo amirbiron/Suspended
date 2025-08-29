@@ -11,6 +11,7 @@ class ActivityTracker:
     def __init__(self):
         self.inactive_days_alert = config.INACTIVE_DAYS_ALERT
         self.auto_suspend_days = config.AUTO_SUSPEND_DAYS
+        self.auto_suspend_enabled = getattr(config, "AUTO_SUSPEND_ENABLED", False)
 
     def record_bot_usage(self, service_id: str, user_id: int, service_name: Optional[str] = None) -> None:
         """רישום שימוש בבוט"""
@@ -28,10 +29,13 @@ class ActivityTracker:
         for service in alert_services:
             self._send_inactivity_alert(service)
 
-        # בדיקת שירותים להשעיה אוטומטית
-        suspend_services = db.get_inactive_services(self.auto_suspend_days)
-        for service in suspend_services:
-            self._auto_suspend_service(service)
+        # בדיקת שירותים להשעיה אוטומטית (מותנה בדגל הפעלה)
+        if self.auto_suspend_enabled:
+            suspend_services = db.get_inactive_services(self.auto_suspend_days)
+            for service in suspend_services:
+                self._auto_suspend_service(service)
+        else:
+            print("השבתה אוטומטית כבויה (AUTO_SUSPEND_ENABLED=false)")
 
     def _send_inactivity_alert(self, service: dict):
         """שליחת התראה על חוסר פעילות"""
@@ -60,7 +64,13 @@ class ActivityTracker:
         message += f"שירות: {service_name}\n"
         message += f"ID: {service_id}\n"
         message += f"ימים ללא פעילות: {inactive_days}\n"
-        message += f"השעיה אוטומטית בעוד: {self.auto_suspend_days - self.inactive_days_alert} ימים"
+        # מידע על השעיה אוטומטית רק אם האפשרות פעילה
+        if self.auto_suspend_enabled:
+            try:
+                days_until_suspend = max(self.auto_suspend_days - self.inactive_days_alert, 0)
+                message += f"השעיה אוטומטית בעוד: {days_until_suspend} ימים"
+            except Exception:
+                pass
 
         send_notification(message)
         db.update_alert_sent(service_id)

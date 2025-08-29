@@ -33,6 +33,9 @@ INACTIVE_DAYS_ALERT = 3  # התראה אחרי כמה ימים של חוסר פ�
 AUTO_SUSPEND_DAYS = 7  # השעיה אוטומטית אחרי כמה ימים
 CHECK_INTERVAL_HOURS = 24  # בדיקה כל כמה שעות
 
+# אפשרות לבטל השעיה אוטומטית
+AUTO_SUSPEND_ENABLED = os.getenv("AUTO_SUSPEND_ENABLED", "false").lower() == "true"
+
 # הגדרות ניטור סטטוס
 STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("STATUS_CHECK_INTERVAL_SECONDS", "300"))  # 5 minutes default
 STATUS_MONITORING_ENABLED = os.getenv("STATUS_MONITORING_ENABLED", "true").lower() == "true"
