@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+import re
 
 import requests
 
@@ -118,29 +119,37 @@ def send_deploy_event_notification(
     def _is_dependency_update_commit(msg: Optional[str]) -> bool:
         if not msg or not isinstance(msg, str):
             return False
-        text = msg.strip().lower()
-        # דגלים נפוצים של Dependabot/Renovate/עדכוני תלויות
-        patterns = [
-            "dependabot",
-            "renovate",
-            "chore(deps",
-            "build(deps",
-            "deps:",
-            "bump ",
-            "bump:",
-            "bump(",
-            "update dependency",
-            "update dependencies",
-            "upgrade dependency",
-            "upgrade dependencies",
-            "requirements.txt",
-            "pipfile",
-            "poetry.lock",
-            "pip-tools",
-            "pip-compile",
-            "security upgrade",
+        text = msg.strip()
+        lower_text = text.lower()
+
+        # החרגות עבור קומיטים שמגדירים כלים (config) ולא מבצעים עדכון גרסאות אמיתי
+        negative_substrings = [
+            "dependabot.yml",
+            "dependabot-automerge",
+            "renovate.json",
+            "renovate-config",
+            "configure dependabot",
+            "configure renovate",
+            "enable dependabot",
+            "add dependabot",
+            "update dependabot",
+            "automerge",
         ]
-        return any(p in text for p in patterns)
+        if any(s in lower_text for s in negative_substrings):
+            return False
+
+        # זיהוי שמרני יותר של עדכוני תלויות אמיתיים
+        positive_regexes = [
+            r"(?i)\bbump\b[^\n]*\bfrom\b[^\n]*\bto\b",  # Bump X from A to B
+            r"(?i)^(chore|build|fix)\(deps[^)]*\):",        # chore(deps): / build(deps): / fix(deps):
+            r"(?i)\bupdate (dependency|dependencies)\b[^\n]*\bto\b",  # update dependency X to Y
+            r"(?i)\bupgrade (dependency|dependencies)\b[^\n]*\bto\b", # upgrade dependency X to Y
+            r"(?i)\bsecurity (upgrade|update)\b[^\n]*\bto\b",        # security upgrade to version
+            r"(?i)Merge pull request #\d+.*dependabot(/|\b)",           # Merge commits of dependabot PRs
+            r"(?i)dependabot/(npm_and_yarn|pip|bundler|go_modules|gomod|cargo|nuget|composer|pub|maven|gradle)",
+            r"(?i)^renovate\b.*(update|pin|rollback).*dependenc",       # Renovate dependency updates
+        ]
+        return any(re.search(rx, text) for rx in positive_regexes)
 
     success_states = {"succeeded", "success", "completed", "deployed", "live"}
     is_success = str(status).lower() in success_states
