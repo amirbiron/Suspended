@@ -195,10 +195,13 @@ class StatusMonitor:
 				"deployed",
 				"live",
 				"failed",
+				"failure",
 				"error",
+				"errored",
 				"canceled",
 				"cancelled",
 				"aborted",
+				"stopped",
 			}
 
 			simplified = self._simplify_status(status)
@@ -209,7 +212,15 @@ class StatusMonitor:
 				raw_status,
 				simplified,
 			)
-			if status in terminal_statuses or simplified in {"online", "offline"}:
+			# התאמה שמרנית: לעיתים מגיעות צורות כמו "fail", "erroring", "canceling"
+			failure_substrings = ("fail", "error", "cancel", "abort", "stop")
+			status_lower = str(status).lower()
+			is_terminal = (
+				status_lower in terminal_statuses
+				or any(sub in status_lower for sub in failure_substrings)
+				or simplified in {"online", "offline"}
+			)
+			if is_terminal:
 				logger.info(
 					"Terminal deploy detected for %s: id=%s, status=%s (simplified=%s)",
 					service_id,
@@ -515,12 +526,21 @@ class StatusMonitor:
 						"deployed",
 						"live",
 						"failed",
+						"failure",
 						"error",
+						"errored",
 						"canceled",
 						"cancelled",
 						"aborted",
+						"stopped",
 					}
-					if deploy_id and (status in terminal_statuses or simplified in {"online", "offline"}):
+					failure_substrings = ("fail", "error", "cancel", "abort", "stop")
+					is_terminal = (
+						status in terminal_statuses
+						or any(sub in status for sub in failure_substrings)
+						or simplified in {"online", "offline"}
+					)
+					if deploy_id and is_terminal:
 						name = service_name
 						if not name:
 							doc = db.get_service_activity(service_id) or {}

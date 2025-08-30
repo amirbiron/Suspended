@@ -25,7 +25,7 @@ def _send_to_chat(chat_id: str, message: str, title: Optional[str] = None) -> bo
     formatted_message += f"⏰ {timestamp}\n\n"
     formatted_message += message
 
-    payload = {"chat_id": str(chat_id), "text": formatted_message, "parse_mode": "Markdown"}
+    payload = {"chat_id": str(chat_id), "text": formatted_message, "parse_mode": "Markdown", "disable_web_page_preview": True}
 
     try:
         response = requests.post(url, json=payload, timeout=15)
