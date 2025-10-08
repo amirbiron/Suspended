@@ -200,11 +200,14 @@ class RenderMonitorBot:
         self.app.add_handler(
             CallbackQueryHandler(
                 self.service_action_callback,
-                pattern="^suspend_|^resume_|^delete_|^back_to_manage$",
+                pattern="^suspend_|^resume_|^back_to_manage$",
             )
         )
         self.app.add_handler(
             CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$")
+        )
+        self.app.add_handler(
+            CallbackQueryHandler(self.delete_service_confirm_callback, pattern="^confirm_delete_|^cancel_delete_")
         )
         self.app.add_handler(CallbackQueryHandler(self.monitor_detail_callback, pattern="^monitor_detail_"))
         self.app.add_handler(
@@ -249,7 +252,14 @@ class RenderMonitorBot:
 /clear_test_data - ניקוי נתוני בדיקות
 /diag - דיאגנוסטיקה מהירה
 
-/delete_service [service_id] - (אדמין) מחיקת שירות והיסטוריה מה-DB
+/delete_service [service_id] - (אדמין) מחיקת שירות מה-DB בלבד
+
+מידע חשוב:
+• פעולה זו בלתי הפיכה — לא ניתן לשחזר.
+• המחיקה מתבצעת רק מהמסד, לא מ-Render.
+• מה יימחק: `service_activity`, `user_interactions`, `manual_actions`, `status_changes`, `deploy_events`.
+• איך למצוא ID: דרך `/status` או מדשבורד Render.
+• דוגמה: `/delete_service srv-1234567890`
 
 /help - הצגת הודעה זו
         """
@@ -271,17 +281,54 @@ class RenderMonitorBot:
             await msg.reply_text("שימוש: /delete_service [service_id]")
             return
         service_id = context.args[0]
+        # שלב אימות לפני מחיקה
+        warning = "⚠️ *אישור מחיקה*\n\n"
+        warning += f"האם אתה בטוח שברצונך למחוק לצמיתות את השירות עם ה-ID: `{service_id}`?\n\n"
+        warning += "מה יימחק מהמסד (לא ב-Render):\n"
+        warning += "• `service_activity`\n"
+        warning += "• `user_interactions`\n"
+        warning += "• `manual_actions`\n"
+        warning += "• `status_changes`\n"
+        warning += "• `deploy_events`\n\n"
+        warning += "פעולה זו בלתי הפיכה."
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ כן, מחק", callback_data=f"confirm_delete_{service_id}"),
+                InlineKeyboardButton("❌ בטל", callback_data=f"cancel_delete_{service_id}"),
+            ]
+        ]
+        await msg.reply_text(warning, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    async def delete_service_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """טיפול באישור/ביטול מחיקה ב-inline keyboard"""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+        await query.answer()
+
+        data = query.data
+        user = query.from_user
+        if not user or str(user.id) != config.ADMIN_CHAT_ID:
+            await query.answer("אין הרשאה", show_alert=True)
+            return
+
         try:
-            result = self.db.delete_service(service_id)
-            message = (
-                f"✅ נמחק השירות `{service_id}` מה-DB\n"
-                f"🗂️ services: {result.get('services', 0)} | interactions: {result.get('user_interactions', 0)} | "
-                f"manual: {result.get('manual_actions', 0)} | status: {result.get('status_changes', 0)} | "
-                f"deploy: {result.get('deploy_events', 0)}"
-            )
-            await msg.reply_text(message, parse_mode="Markdown")
+            if data.startswith("confirm_delete_"):
+                service_id = data.replace("confirm_delete_", "")
+                result = self.db.delete_service(service_id)
+                summary = (
+                    f"✅ נמחק השירות `{service_id}` מה-DB\n"
+                    f"🗂️ services: {result.get('services', 0)} | interactions: {result.get('user_interactions', 0)} | "
+                    f"manual: {result.get('manual_actions', 0)} | status: {result.get('status_changes', 0)} | "
+                    f"deploy: {result.get('deploy_events', 0)}"
+                )
+                await query.edit_message_text(summary, parse_mode="Markdown")
+            elif data.startswith("cancel_delete_"):
+                service_id = data.replace("cancel_delete_", "")
+                await query.edit_message_text(f"❎ המחיקה בוטלה עבור `{service_id}`", parse_mode="Markdown")
         except Exception as e:
-            await msg.reply_text(f"❌ שגיאה במחיקה: {e}")
+            await query.edit_message_text(f"❌ שגיאה במחיקה: {e}")
 
     async def plans_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מציג עבור כל שירות אם הוא בתוכנית חינמית/בתשלום והאם יש לו דיסק מחובר"""
@@ -705,10 +752,6 @@ class RenderMonitorBot:
             display_name = service_name[:25] + "..." if len(service_name) > 25 else service_name
 
             row = [InlineKeyboardButton(f"{emoji} {display_name}", callback_data=f"manage_{service_id}")]
-            # הוסף כפתור מחיקה קטן בשורה לצידו אם אדמין
-            user = update.effective_user
-            if self._is_admin_user(user):
-                row.append(InlineKeyboardButton("🗑️", callback_data=f"delete_{service_id}"))
             keyboard.append(row)
 
         # כפתור השעיה כללית
@@ -751,8 +794,6 @@ class RenderMonitorBot:
             display_name = service_name[:25] + "..." if len(service_name) > 25 else service_name
 
             row = [InlineKeyboardButton(f"{emoji} {display_name}", callback_data=f"manage_{service_id}")]
-            if self._is_admin_user(query.from_user):
-                row.append(InlineKeyboardButton("🗑️", callback_data=f"delete_{service_id}"))
             keyboard.append(row)
 
         # כפתור השעיה כללית
@@ -807,10 +848,6 @@ class RenderMonitorBot:
             keyboard.append([InlineKeyboardButton("▶️ הפעל מחדש", callback_data=f"resume_{service_id}")])
         else:
             keyboard.append([InlineKeyboardButton("⏸️ השעה", callback_data=f"suspend_{service_id}")])
-
-        # כפתור מחיקה (אדמין בלבד)
-        if self._is_admin_user(query.from_user):
-            keyboard.append([InlineKeyboardButton("🗑️ מחק שירות (DB בלבד)", callback_data=f"delete_{service_id}")])
 
         keyboard.append([InlineKeyboardButton("🔙 חזור", callback_data="back_to_manage")])
 
@@ -868,23 +905,7 @@ class RenderMonitorBot:
         elif data == "back_to_manage":  # מטפל בכפתור "חזור"
             # מציג מחדש את תפריט הניהול בעזרת עריכת ההודעה
             await self.show_manage_menu(query)
-        elif data.startswith("delete_"):
-            # מחיקת שירות מה-DB (אדמין בלבד)
-            service_id = data.replace("delete_", "")
-            if not self._is_admin_user(query.from_user):
-                await query.answer("אין הרשאה", show_alert=True)
-                return
-            try:
-                result = self.db.delete_service(service_id)
-                summary = (
-                    f"✅ נמחק השירות `{service_id}` מה-DB\n"
-                    f"🗂️ services: {result.get('services', 0)} | interactions: {result.get('user_interactions', 0)} | "
-                    f"manual: {result.get('manual_actions', 0)} | status: {result.get('status_changes', 0)} | "
-                    f"deploy: {result.get('deploy_events', 0)}"
-                )
-                await query.edit_message_text(summary, parse_mode="Markdown")
-            except Exception as e:
-                await query.edit_message_text(f"❌ שגיאה במחיקה: {e}")
+        
 
     async def suspend_button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """טיפול בכפתורי אישור/ביטול השעיה כללית"""
@@ -1075,12 +1096,6 @@ class RenderMonitorBot:
             button_text = f"{status_emoji} {monitor_emoji} {service_name[:20]}"
 
             row = [InlineKeyboardButton(button_text, callback_data=f"monitor_detail_{service_id}")]
-            try:
-                uid = str((query.from_user or {}).id)  # type: ignore[attr-defined]
-            except Exception:
-                uid = None
-            if uid and uid == config.ADMIN_CHAT_ID:
-                row.append(InlineKeyboardButton("🗑️", callback_data=f"delete_{service_id}"))
             keyboard.append(row)
 
         # כפתור לרשימת המנוטרים
