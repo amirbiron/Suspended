@@ -212,6 +212,28 @@ class Database:
 
         return result.deleted_count
 
+    def delete_service(self, service_id: str) -> dict:
+        """מחיקת שירות וכל הרשומות הקשורות אליו מהמערכת.
+
+        מוחק את המסמך הראשי מ-`service_activity` ואת ההיסטוריות/אינטראקציות הקשורות:
+        `user_interactions`, `manual_actions`, `status_changes`, `deploy_events`.
+
+        מחזיר ספירת מחיקות לכל קולקציה.
+        """
+        services_del = self.services.delete_one({"_id": service_id}).deleted_count
+        interactions_del = self.user_interactions.delete_many({"service_id": service_id}).deleted_count
+        manual_del = self.manual_actions.delete_many({"service_id": service_id}).deleted_count
+        status_changes_del = self.status_changes.delete_many({"service_id": service_id}).deleted_count
+        deploy_events_del = self.deploy_events.delete_many({"service_id": service_id}).deleted_count
+
+        return {
+            "services": services_del,
+            "user_interactions": interactions_del,
+            "manual_actions": manual_del,
+            "status_changes": status_changes_del,
+            "deploy_events": deploy_events_del,
+        }
+
     def toggle_deploy_notifications(self, service_id: str, enabled: bool):
         """הפעלה/כיבוי התראות דיפלוי לשירות ספציפי"""
         # ודא שהמסמך קיים כדי ששירותים שלא נרשמו מראש לא יידלגו בסריקה
