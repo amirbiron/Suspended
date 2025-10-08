@@ -206,6 +206,9 @@ class RenderMonitorBot:
         self.app.add_handler(
             CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$")
         )
+        self.app.add_handler(
+            CallbackQueryHandler(self.delete_service_confirm_callback, pattern="^confirm_delete_|^cancel_delete_")
+        )
         self.app.add_handler(CallbackQueryHandler(self.monitor_detail_callback, pattern="^monitor_detail_"))
         self.app.add_handler(
             CallbackQueryHandler(
@@ -278,17 +281,54 @@ class RenderMonitorBot:
             await msg.reply_text("שימוש: /delete_service [service_id]")
             return
         service_id = context.args[0]
+        # שלב אימות לפני מחיקה
+        warning = "⚠️ *אישור מחיקה*\n\n"
+        warning += f"האם אתה בטוח שברצונך למחוק לצמיתות את השירות עם ה-ID: `{service_id}`?\n\n"
+        warning += "מה יימחק מהמסד (לא ב-Render):\n"
+        warning += "• `service_activity`\n"
+        warning += "• `user_interactions`\n"
+        warning += "• `manual_actions`\n"
+        warning += "• `status_changes`\n"
+        warning += "• `deploy_events`\n\n"
+        warning += "פעולה זו בלתי הפיכה."
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ כן, מחק", callback_data=f"confirm_delete_{service_id}"),
+                InlineKeyboardButton("❌ בטל", callback_data=f"cancel_delete_{service_id}"),
+            ]
+        ]
+        await msg.reply_text(warning, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    async def delete_service_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """טיפול באישור/ביטול מחיקה ב-inline keyboard"""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+        await query.answer()
+
+        data = query.data
+        user = query.from_user
+        if not user or str(user.id) != config.ADMIN_CHAT_ID:
+            await query.answer("אין הרשאה", show_alert=True)
+            return
+
         try:
-            result = self.db.delete_service(service_id)
-            message = (
-                f"✅ נמחק השירות `{service_id}` מה-DB\n"
-                f"🗂️ services: {result.get('services', 0)} | interactions: {result.get('user_interactions', 0)} | "
-                f"manual: {result.get('manual_actions', 0)} | status: {result.get('status_changes', 0)} | "
-                f"deploy: {result.get('deploy_events', 0)}"
-            )
-            await msg.reply_text(message, parse_mode="Markdown")
+            if data.startswith("confirm_delete_"):
+                service_id = data.replace("confirm_delete_", "")
+                result = self.db.delete_service(service_id)
+                summary = (
+                    f"✅ נמחק השירות `{service_id}` מה-DB\n"
+                    f"🗂️ services: {result.get('services', 0)} | interactions: {result.get('user_interactions', 0)} | "
+                    f"manual: {result.get('manual_actions', 0)} | status: {result.get('status_changes', 0)} | "
+                    f"deploy: {result.get('deploy_events', 0)}"
+                )
+                await query.edit_message_text(summary, parse_mode="Markdown")
+            elif data.startswith("cancel_delete_"):
+                service_id = data.replace("cancel_delete_", "")
+                await query.edit_message_text(f"❎ המחיקה בוטלה עבור `{service_id}`", parse_mode="Markdown")
         except Exception as e:
-            await msg.reply_text(f"❌ שגיאה במחיקה: {e}")
+            await query.edit_message_text(f"❌ שגיאה במחיקה: {e}")
 
     async def plans_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מציג עבור כל שירות אם הוא בתוכנית חינמית/בתשלום והאם יש לו דיסק מחובר"""
