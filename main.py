@@ -107,6 +107,18 @@ class RenderMonitorBot:
         self.setup_handlers()
         # הפקודות יוגדרו ב-post_init
 
+    def _is_admin_user(self, user_obj) -> bool:
+        """בדיקה בטוחה האם המשתמש הוא אדמין לפי ADMIN_CHAT_ID."""
+        try:
+            if user_obj is None:
+                return False
+            user_id = getattr(user_obj, "id", None)
+            if user_id is None:
+                return False
+            return str(user_id) == str(config.ADMIN_CHAT_ID)
+        except Exception:
+            return False
+
     def _simplified_status_live_or_db(self, service: dict) -> str:
         """מחזיר סטטוס מפושט (online/offline/deploying/unknown) לפי מצב חי מ-Render,
         ובנפילה חוזר לערך שמור במסד הנתונים.
@@ -695,7 +707,7 @@ class RenderMonitorBot:
             row = [InlineKeyboardButton(f"{emoji} {display_name}", callback_data=f"manage_{service_id}")]
             # הוסף כפתור מחיקה קטן בשורה לצידו אם אדמין
             user = update.effective_user
-            if user and str(user.id) == config.ADMIN_CHAT_ID:
+            if self._is_admin_user(user):
                 row.append(InlineKeyboardButton("🗑️", callback_data=f"delete_{service_id}"))
             keyboard.append(row)
 
@@ -739,11 +751,7 @@ class RenderMonitorBot:
             display_name = service_name[:25] + "..." if len(service_name) > 25 else service_name
 
             row = [InlineKeyboardButton(f"{emoji} {display_name}", callback_data=f"manage_{service_id}")]
-            try:
-                uid = str((query.from_user or {}).id)  # type: ignore[attr-defined]
-            except Exception:
-                uid = None
-            if uid and uid == config.ADMIN_CHAT_ID:
+            if self._is_admin_user(query.from_user):
                 row.append(InlineKeyboardButton("🗑️", callback_data=f"delete_{service_id}"))
             keyboard.append(row)
 
@@ -801,11 +809,7 @@ class RenderMonitorBot:
             keyboard.append([InlineKeyboardButton("⏸️ השעה", callback_data=f"suspend_{service_id}")])
 
         # כפתור מחיקה (אדמין בלבד)
-        try:
-            uid = str((query.from_user or {}).id)  # type: ignore[attr-defined]
-        except Exception:
-            uid = None
-        if uid and uid == config.ADMIN_CHAT_ID:
+        if self._is_admin_user(query.from_user):
             keyboard.append([InlineKeyboardButton("🗑️ מחק שירות (DB בלבד)", callback_data=f"delete_{service_id}")])
 
         keyboard.append([InlineKeyboardButton("🔙 חזור", callback_data="back_to_manage")])
@@ -867,11 +871,7 @@ class RenderMonitorBot:
         elif data.startswith("delete_"):
             # מחיקת שירות מה-DB (אדמין בלבד)
             service_id = data.replace("delete_", "")
-            try:
-                uid = str((query.from_user or {}).id)  # type: ignore[attr-defined]
-            except Exception:
-                uid = None
-            if uid != config.ADMIN_CHAT_ID:
+            if not self._is_admin_user(query.from_user):
                 await query.answer("אין הרשאה", show_alert=True)
                 return
             try:
