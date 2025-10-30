@@ -1433,6 +1433,20 @@ class RenderMonitorBot:
                 logs = self.render_api.get_service_logs(service_id, tail=min(lines, 200))
             
             if not logs:
+                # נסה אסטרטגיות נוספות לפני הודעת ריקנות
+                try:
+                    alt_logs = []
+                    # 1) נסה טווח זמן של 15 דקות באמצעות האלגוריתם הלוגי
+                    alt_logs = self.render_api.get_recent_logs(service_id, minutes=15)
+                    if not alt_logs:
+                        # 2) נסה להביא יותר שורות אחרונות (עד 1000)
+                        alt_logs = self.render_api.get_service_logs(service_id, tail=min(1000, max(lines, 200)))
+                    if alt_logs:
+                        logs = alt_logs[-lines:] if len(alt_logs) > lines else alt_logs
+                except Exception:
+                    pass
+
+            if not logs:
                 await msg.reply_text(
                     "📭 לא נמצאו לוגים לשירות זה כרגע\n\n"
                     "אפשרויות להמשך:\n"
