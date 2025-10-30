@@ -274,6 +274,88 @@ class Database:
             {"service_id": service_id, "deploy_id": deploy_id, "status": status, "reported_at": datetime.now(timezone.utc)}
         )
 
+    # ===== ניטור לוגים =====
+    
+    def enable_log_monitoring(
+        self,
+        service_id: str,
+        user_id: int,
+        service_name: Optional[str] = None,
+        error_threshold: int = 5,
+    ):
+        """הפעלת ניטור לוגים לשירות"""
+        update_data = {
+            "log_monitoring.enabled": True,
+            "log_monitoring.enabled_by": user_id,
+            "log_monitoring.enabled_at": datetime.now(timezone.utc),
+            "log_monitoring.error_threshold": error_threshold,
+        }
+
+        if service_name:
+            update_data["service_name"] = service_name
+
+        return self.services.update_one(
+            {"_id": service_id}, 
+            {"$set": update_data, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}}, 
+            upsert=True
+        )
+
+    def disable_log_monitoring(self, service_id: str, user_id: int):
+        """כיבוי ניטור לוגים לשירות"""
+        return self.services.update_one(
+            {"_id": service_id},
+            {
+                "$set": {
+                    "log_monitoring.enabled": False,
+                    "log_monitoring.disabled_by": user_id,
+                    "log_monitoring.disabled_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+
+    def get_log_monitored_services(self):
+        """קבלת רשימת שירותים עם ניטור לוגים פעיל"""
+        return list(self.services.find({"log_monitoring.enabled": True}))
+
+    def get_log_monitoring_settings(self, service_id: str) -> dict:
+        """קבלת הגדרות ניטור לוגים של שירות"""
+        service = self.services.find_one({"_id": service_id})
+        if not service:
+            return {"error_threshold": 5}
+        
+        log_monitoring = service.get("log_monitoring", {})
+        return {
+            "enabled": log_monitoring.get("enabled", False),
+            "error_threshold": log_monitoring.get("error_threshold", 5),
+            "enabled_by": log_monitoring.get("enabled_by"),
+            "enabled_at": log_monitoring.get("enabled_at"),
+        }
+
+    def record_log_error(self, service_id: str, error_count: int, is_critical: bool):
+        """רישום שגיאות לוג שזוהו"""
+        return self.services.update_one(
+            {"_id": service_id},
+            {
+                "$set": {
+                    "log_monitoring.last_error_count": error_count,
+                    "log_monitoring.last_error_time": datetime.now(timezone.utc),
+                    "log_monitoring.last_was_critical": is_critical,
+                    "log_monitoring.last_checked": datetime.now(timezone.utc),
+                },
+                "$inc": {
+                    "log_monitoring.total_errors": error_count,
+                    "log_monitoring.total_critical_errors": 1 if is_critical else 0,
+                }
+            },
+        )
+
+    def update_log_threshold(self, service_id: str, error_threshold: int):
+        """עדכון סף שגיאות לניטור לוגים"""
+        return self.services.update_one(
+            {"_id": service_id},
+            {"$set": {"log_monitoring.error_threshold": error_threshold}}
+        )
+
 
 # יצירת instance גלובלי
 db = Database()

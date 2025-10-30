@@ -357,6 +357,74 @@ class RenderAPI:
 			return False
 		return None
 
+	# ===== לוגים =====
+
+	def get_service_logs(self, service_id: str, tail: int = 100, start_time: Optional[str] = None,
+	                    end_time: Optional[str] = None) -> List[Dict[str, Any]]:
+		"""קבלת לוגים של שירות
+		
+		Args:
+			service_id: מזהה השירות
+			tail: מספר שורות לוג להחזיר (ברירת מחדל: 100, מקסימום: 10000)
+			start_time: זמן התחלה (ISO 8601 format)
+			end_time: זמן סיום (ISO 8601 format)
+		
+		Returns:
+			רשימת entries של לוגים, כל אחד עם: id, timestamp, text, stream
+		"""
+		url = f"{self.base_url}/services/{service_id}/logs"
+		
+		params = {}
+		if tail:
+			params["tail"] = min(tail, 10000)  # Render מגביל ל-10000
+		if start_time:
+			params["startTime"] = start_time
+		if end_time:
+			params["endTime"] = end_time
+		
+		try:
+			response = requests.get(url, headers=self.headers, params=params, timeout=30)
+			if response.status_code != 200:
+				return []
+			
+			data = response.json()
+			
+			# Render מחזיר מבנה כמו: [{"id": "...", "timestamp": "...", "text": "...", "stream": "stdout"}]
+			# או: {"logs": [...]}
+			if isinstance(data, list):
+				return cast(List[Dict[str, Any]], data)
+			elif isinstance(data, dict):
+				logs = data.get("logs") or data.get("entries") or data.get("data") or []
+				return cast(List[Dict[str, Any]], logs)
+			
+			return []
+		except requests.RequestException as e:
+			import logging
+			logging.error(f"Error fetching logs for service {service_id}: {e}")
+			return []
+
+	def get_recent_logs(self, service_id: str, minutes: int = 5) -> List[Dict[str, Any]]:
+		"""קבלת לוגים מהדקות האחרונות
+		
+		Args:
+			service_id: מזהה השירות
+			minutes: כמה דקות אחורה לחפש
+		
+		Returns:
+			רשימת לוגים
+		"""
+		from datetime import datetime, timezone, timedelta
+		
+		end_time = datetime.now(timezone.utc)
+		start_time = end_time - timedelta(minutes=minutes)
+		
+		return self.get_service_logs(
+			service_id,
+			tail=1000,
+			start_time=start_time.isoformat(),
+			end_time=end_time.isoformat()
+		)
+
 
 # יצירת instance גלובלי
 render_api = RenderAPI()
