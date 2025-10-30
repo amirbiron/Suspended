@@ -2018,15 +2018,15 @@ class RenderMonitorBot:
         	confirm_message += f"📝 ערך חדש: `{value[:50]}{'...' if len(value) > 50 else ''}`\n\n"
         	confirm_message += "האם אתה בטוח? פעולה זו עשויה לגרום לדיפלוי מחדש של השירות."
         	
-        keyboard = [
-        	[
-        		InlineKeyboardButton(
-        			"✅ כן, עדכן",
-        			callback_data=f"confirm_env_set_{quote(service_id, safe='')}_{quote(key, safe='')}"
-        		),
-        		InlineKeyboardButton("❌ בטל", callback_data="cancel_env_action"),
-        	]
-        ]
+	        keyboard = [
+	        	[
+	        		InlineKeyboardButton(
+	        			"✅ כן, עדכן",
+	        			callback_data=f"confirm_env_set_{quote(service_id, safe='')}_{quote(key, safe='')}"
+	        		),
+	        		InlineKeyboardButton("❌ בטל", callback_data="cancel_env_action"),
+	        	]
+	        ]
         	
         	# שמירת הערך בזיכרון זמני (context.user_data)
         	if context.user_data is not None:
@@ -2081,15 +2081,15 @@ class RenderMonitorBot:
         	confirm_message += f"🗑️ משתנה למחיקה: `{key}`\n\n"
         	confirm_message += "האם אתה בטוח? פעולה זו בלתי הפיכה ועשויה לגרום לדיפלוי מחדש."
         	
-        keyboard = [
-        	[
-        		InlineKeyboardButton(
-        			"✅ כן, מחק",
-        			callback_data=f"confirm_env_delete_{quote(service_id, safe='')}_{quote(key, safe='')}"
-        		),
-        		InlineKeyboardButton("❌ בטל", callback_data="cancel_env_action"),
-        	]
-        ]
+	        keyboard = [
+	        	[
+	        		InlineKeyboardButton(
+	        			"✅ כן, מחק",
+	        			callback_data=f"confirm_env_delete_{quote(service_id, safe='')}_{quote(key, safe='')}"
+	        		),
+	        		InlineKeyboardButton("❌ בטל", callback_data="cancel_env_action"),
+	        	]
+	        ]
         	
         	await msg.reply_text(
         		confirm_message,
@@ -2118,16 +2118,16 @@ class RenderMonitorBot:
         		await query.edit_message_text("❌ הפעולה בוטלה")
         		return
 
-        if data.startswith("confirm_env_set_"):
-        	# פורמט: confirm_env_set_{urlencoded(service_id)}_{urlencoded(key)}
-        	payload = data[len("confirm_env_set_"):]
-        	parts = payload.split("_", 1)
-        	if len(parts) < 2:
-        		await query.answer("❌ שגיאה בפורמט הנתונים", show_alert=True)
-        		return
+	        if data.startswith("confirm_env_set_"):
+	        	# פורמט: confirm_env_set_{urlencoded(service_id)}_{urlencoded(key)}
+	        	payload = data[len("confirm_env_set_"):]
+	        	parts = payload.split("_", 1)
+	        	if len(parts) < 2:
+	        		await query.answer("❌ שגיאה בפורמט הנתונים", show_alert=True)
+	        		return
 
-        	service_id = unquote(parts[0])
-        	key = unquote(parts[1])
+	        	service_id = unquote(parts[0])
+	        	key = unquote(parts[1])
         		
         		# שליפת הערך מהזיכרון הזמני
         		value_key = f"env_value_{service_id}_{key}"
@@ -2167,16 +2167,16 @@ class RenderMonitorBot:
         				parse_mode="Markdown"
         			)
 
-        elif data.startswith("confirm_env_delete_"):
-        	# פורמט: confirm_env_delete_{urlencoded(service_id)}_{urlencoded(key)}
-        	payload = data[len("confirm_env_delete_"):]
-        	parts = payload.split("_", 1)
-        	if len(parts) < 2:
-        		await query.answer("❌ שגיאה בפורמט הנתונים", show_alert=True)
-        		return
+	        elif data.startswith("confirm_env_delete_"):
+	        	# פורמט: confirm_env_delete_{urlencoded(service_id)}_{urlencoded(key)}
+	        	payload = data[len("confirm_env_delete_"):]
+	        	parts = payload.split("_", 1)
+	        	if len(parts) < 2:
+	        		await query.answer("❌ שגיאה בפורמט הנתונים", show_alert=True)
+	        		return
 
-        	service_id = unquote(parts[0])
-        	key = unquote(parts[1])
+	        	service_id = unquote(parts[0])
+	        	key = unquote(parts[1])
         		
         		await query.answer()
         		await query.edit_message_text("⏳ מוחק משתנה סביבה...")
