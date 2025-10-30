@@ -2,6 +2,7 @@ import asyncio
 import atexit
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -181,6 +182,7 @@ class RenderMonitorBot:
             BotCommand("unmonitor", "🔕 כיבוי ניטור סטטוס"),
             BotCommand("test_monitor", "🧪 בדיקת ניטור"),
             BotCommand("logs", "📋 צפייה בלוגים של שירות"),
+            BotCommand("errors", "🔥 צפייה רק בשגיאות"),
             BotCommand("logs_monitor", "🔍 הפעלת ניטור לוגים"),
             BotCommand("logs_unmonitor", "🔇 כיבוי ניטור לוגים"),
             BotCommand("logs_manage", "🎛️ ניהול ניטור לוגים"),
@@ -215,6 +217,7 @@ class RenderMonitorBot:
 
         # Log monitoring commands
         self.app.add_handler(CommandHandler("logs", self.logs_command))
+        self.app.add_handler(CommandHandler("errors", self.errors_command))  # קיצור דרך לשגיאות
         self.app.add_handler(CommandHandler("logs_monitor", self.logs_monitor_command))
         self.app.add_handler(CommandHandler("logs_unmonitor", self.logs_unmonitor_command))
         self.app.add_handler(CommandHandler("logs_manage", self.logs_manage_command))
@@ -286,10 +289,18 @@ class RenderMonitorBot:
 /diag - דיאגנוסטיקה מהירה
 
 *פקודות ניטור לוגים:* 🆕
-/logs [service_id] [lines] [minutes] - צפייה בלוגים
+/logs [service_id] [lines] [min] [filter] - צפייה בלוגים
   • lines - כמה שורות (ברירת מחדל: 100)
   • minutes - מכמה דקות אחורה (אופציונלי)
-  דוגמה: /logs srv-123 100 5 (100 שורות מה-5 דקות האחרונות)
+  • filter - all/errors/stdout/stderr (אופציונלי)
+  דוגמאות:
+    /logs srv-123 100 5 - 100 שורות מ-5 דקות
+    /logs srv-123 100 5 errors - רק שגיאות מ-5 דקות 🔥
+    /logs srv-123 50 - errors - רק 50 שגיאות אחרונות
+
+/errors [service_id] [lines] [minutes] - צפייה רק בשגיאות 🔥
+  קיצור דרך נוח! דוגמה: /errors srv-123 50 5
+
 /logs_monitor [service_id] [threshold] - הפעלת ניטור לוגים
 /logs_unmonitor [service_id] - כיבוי ניטור לוגים
 /logs_manage - ניהול ניטור לוגים עם כפתורים
@@ -1336,15 +1347,20 @@ class RenderMonitorBot:
             await msg.reply_text(
                 "❌ חסר service ID\n\n"
                 "**שימוש:**\n"
-                "`/logs [service_id] [lines] [minutes]`\n\n"
+                "`/logs [service_id] [lines] [minutes] [filter]`\n\n"
                 "**פרמטרים:**\n"
                 "• `lines` - כמה שורות להציג (ברירת מחדל: 100, מקס: 200)\n"
-                "• `minutes` - מכמה דקות אחורה (ברירת מחדל: כל הזמן)\n\n"
+                "• `minutes` - מכמה דקות אחורה (אופציונלי)\n"
+                "• `filter` - סינון: `all`, `errors`, `stdout`, `stderr` (אופציונלי)\n\n"
                 "**דוגמאות:**\n"
-                "`/logs srv-123456` - 100 שורות אחרונות\n"
+                "`/logs srv-123456` - 100 שורות אחרונות (הכל)\n"
                 "`/logs srv-123456 50` - 50 שורות אחרונות\n"
                 "`/logs srv-123456 100 5` - 100 שורות מה-5 דקות האחרונות\n"
-                "`/logs srv-123456 200 30` - 200 שורות מה-30 דקות האחרונות\n\n"
+                "`/logs srv-123456 100 5 errors` - רק שגיאות מ-5 דקות 🔥\n"
+                "`/logs srv-123456 50 - errors` - רק שגיאות (50 אחרונות) 🔥\n"
+                "`/logs srv-123456 100 - stdout` - רק STDOUT\n\n"
+                "**קיצורי דרך:**\n"
+                "`/errors srv-123456 [lines] [minutes]` - רק שגיאות\n\n"
                 "💡 **טיפ:** השורות מוצגות מהישן לחדש (כרונולוגית)",
                 parse_mode="Markdown"
             )
@@ -1352,7 +1368,13 @@ class RenderMonitorBot:
 
         service_id = context.args[0]
         lines = int(context.args[1]) if len(context.args) > 1 else 100
-        minutes = int(context.args[2]) if len(context.args) > 2 else None
+        
+        # פרמטר minutes יכול להיות מספר או "-" (skip)
+        minutes_arg = context.args[2] if len(context.args) > 2 else None
+        minutes = int(minutes_arg) if minutes_arg and minutes_arg != "-" else None
+        
+        # פרמטר filter (all/errors/stdout/stderr)
+        filter_type = context.args[3].lower() if len(context.args) > 3 else "all"
 
         # בדיקה אם השירות קיים
         service = self.db.get_service_activity(service_id)
@@ -1360,8 +1382,17 @@ class RenderMonitorBot:
 
         # הודעת סטטוס
         time_range = f"מה-{minutes} דקות האחרונות" if minutes else "הכי אחרונים"
+        filter_text = {
+            "errors": "שגיאות בלבד 🔥",
+            "stdout": "STDOUT בלבד",
+            "stderr": "STDERR בלבד",
+            "all": "הכל"
+        }.get(filter_type, "הכל")
+        
         await msg.reply_text(
-            f"📋 מביא {lines} לוגים {time_range} של *{service_name}*...",
+            f"📋 מביא {lines} לוגים {time_range}\n"
+            f"🤖 שירות: *{service_name}*\n"
+            f"🔍 סינון: {filter_text}",
             parse_mode="Markdown"
         )
 
@@ -1380,7 +1411,44 @@ class RenderMonitorBot:
                 await msg.reply_text("📭 לא נמצאו לוגים לשירות זה")
                 return
 
-            # פיצול ללוגים של stdout ו-stderr
+            # סינון לפי הבקשה
+            if filter_type == "errors":
+                # זיהוי שגיאות באמצעות patterns (כמו ב-log_monitor)
+                error_patterns = [
+                    r'(?i)\berror\b', r'(?i)\bexception\b', r'(?i)\bfailed\b',
+                    r'(?i)\bcrash\b', r'(?i)\bfatal\b', r'(?i)traceback',
+                    r'\b[45]\d{2}\b', r'(?i)uncaught', r'(?i)unhandled'
+                ]
+                filtered_logs = []
+                for log in logs:
+                    text = log.get("text", "")
+                    # בדיקה אם זה STDERR או מכיל pattern של שגיאה
+                    if log.get("stream") == "stderr":
+                        filtered_logs.append(log)
+                    else:
+                        for pattern in error_patterns:
+                            if re.search(pattern, text):
+                                filtered_logs.append(log)
+                                break
+                logs = filtered_logs
+                
+                if not logs:
+                    await msg.reply_text("✅ מצוין! לא נמצאו שגיאות בתקופה זו 🎉")
+                    return
+                    
+            elif filter_type == "stdout":
+                logs = [log for log in logs if log.get("stream") == "stdout"]
+                if not logs:
+                    await msg.reply_text("📭 לא נמצאו לוגי STDOUT")
+                    return
+                    
+            elif filter_type == "stderr":
+                logs = [log for log in logs if log.get("stream") == "stderr"]
+                if not logs:
+                    await msg.reply_text("✅ אין STDERR - אין שגיאות!")
+                    return
+
+            # פיצול ללוגים של stdout ו-stderr (אחרי סינון)
             stdout_logs = [log for log in logs if log.get("stream") == "stdout"]
             stderr_logs = [log for log in logs if log.get("stream") == "stderr"]
 
@@ -1407,6 +1475,8 @@ class RenderMonitorBot:
             message += f"📊 סה\"כ: {len(logs)} שורות"
             if minutes:
                 message += f" (מה-{minutes} דקות האחרונות)"
+            if filter_type != "all":
+                message += f" | 🔍 סינון: {filter_text}"
             message += "\n\n"
             
             if stderr_logs:
@@ -1439,6 +1509,42 @@ class RenderMonitorBot:
 
         except Exception as e:
             await msg.reply_text(f"❌ שגיאה בקבלת לוגים: {e}")
+
+    async def errors_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """קיצור דרך לצפייה רק בשגיאות"""
+        msg = update.message
+        if msg is None:
+            return
+        
+        if not context.args:
+            await msg.reply_text(
+                "🔥 *צפייה בשגיאות בלבד*\n\n"
+                "**שימוש:**\n"
+                "`/errors [service_id] [lines] [minutes]`\n\n"
+                "**דוגמאות:**\n"
+                "`/errors srv-123456` - 100 שגיאות אחרונות\n"
+                "`/errors srv-123456 50` - 50 שגיאות אחרונות\n"
+                "`/errors srv-123456 100 5` - שגיאות מ-5 דקות אחרונות\n\n"
+                "💡 זה קיצור דרך ל: `/logs [id] [lines] [min] errors`",
+                parse_mode="Markdown"
+            )
+            return
+        
+        # הוסף "errors" לסוף הפרמטרים
+        new_args = list(context.args)
+        
+        # אם יש פחות מ-3 פרמטרים, הוסף "-" למילוי
+        while len(new_args) < 3:
+            if len(new_args) == 1:
+                new_args.append("100")  # ברירת מחדל ל-lines
+            elif len(new_args) == 2:
+                new_args.append("-")  # דלג על minutes
+        
+        new_args.append("errors")
+        context.args = new_args
+        
+        # קרא לפונקציה הרגילה
+        await self.logs_command(update, context)
 
     async def logs_monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """הפעלת ניטור לוגים לשירות"""

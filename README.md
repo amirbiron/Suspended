@@ -78,7 +78,9 @@ AUTO_SUSPEND_ENABLED=false
 # 3. קבל התראות כשיש שגיאות! 🔔
 ```
 
-📖 **למדריך מפורט:** ראה [LOG_MONITORING_GUIDE.md](LOG_MONITORING_GUIDE.md)
+📖 **מדריכים מפורטים:**
+- [LOG_MONITORING_GUIDE.md](LOG_MONITORING_GUIDE.md) - מדריך ניטור לוגים מלא
+- [ERRORS_FILTER_GUIDE.md](ERRORS_FILTER_GUIDE.md) - מדריך סינון שגיאות 🔥
 
 ### 3. הגדרת שירותים לניטור
 
@@ -108,16 +110,29 @@ python main.py
 - `/help` - עזרה ורשימת פקודות
 
 ### פקודות ניטור לוגים 🆕
-- `/logs [service_id] [lines]` - צפייה בלוגים של שירות
+- `/logs [service_id] [lines] [minutes] [filter]` - צפייה בלוגים
+- `/errors [service_id] [lines] [minutes]` - צפייה רק בשגיאות 🔥
 - `/logs_monitor [service_id] [threshold]` - הפעלת ניטור אוטומטי של שגיאות
 - `/logs_unmonitor [service_id]` - כיבוי ניטור לוגים
 - `/logs_manage` - ניהול ניטור לוגים עם ממשק כפתורים
 
 **דוגמאות:**
 ```bash
+# צפייה בכל הלוגים
 /logs srv-123456              # 100 שורות אחרונות
 /logs srv-123456 50           # 50 שורות אחרונות
 /logs srv-123456 100 5        # 100 שורות מה-5 דקות האחרונות
+
+# צפייה רק בשגיאות 🔥
+/errors srv-123456            # 100 שגיאות אחרונות
+/errors srv-123456 50 5       # 50 שגיאות מ-5 דקות
+/logs srv-123456 100 5 errors # אותו דבר (דרך ארוכה)
+
+# סינונים נוספים
+/logs srv-123456 100 5 stdout # רק STDOUT
+/logs srv-123456 100 5 stderr # רק STDERR
+
+# ניטור אוטומטי
 /logs_monitor srv-123456 5    # התראה אחרי 5 שגיאות
 ```
 
