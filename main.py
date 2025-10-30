@@ -186,6 +186,8 @@ class RenderMonitorBot:
             BotCommand("logs_monitor", "🔍 הפעלת ניטור לוגים"),
             BotCommand("logs_unmonitor", "🔇 כיבוי ניטור לוגים"),
             BotCommand("logs_manage", "🎛️ ניהול ניטור לוגים"),
+            # Alias נוח ללא קו תחתון
+            BotCommand("logsmanage", "🎛️ ניהול ניטור לוגים (כינוי)"),
             BotCommand("help", "❓ עזרה ומידע"),
         ]
 
@@ -221,6 +223,8 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("logs_monitor", self.logs_monitor_command))
         self.app.add_handler(CommandHandler("logs_unmonitor", self.logs_unmonitor_command))
         self.app.add_handler(CommandHandler("logs_manage", self.logs_manage_command))
+        # Alias ללא קו תחתון עבור נוחות המשתמשים
+        self.app.add_handler(CommandHandler("logsmanage", self.logs_manage_command))
 
         self.app.add_handler(
             CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$")
@@ -1403,6 +1407,14 @@ class RenderMonitorBot:
                 logs = self.render_api.get_recent_logs(service_id, minutes=minutes)
                 # הגבלה למספר השורות המבוקש
                 logs = logs[-lines:] if len(logs) > lines else logs
+
+                # אם לא התקבלו לוגים בטווח – בצע נפילה חכמה לאחרונים בכלל
+                if not logs:
+                    try:
+                        await msg.reply_text("ℹ️ לא נמצאו לוגים בטווח הזמן המבוקש – מציג האחרונות מכל הזמן")
+                    except Exception:
+                        pass
+                    logs = self.render_api.get_service_logs(service_id, tail=min(lines, 200))
             else:
                 # לוגים אחרונים (ברירת מחדל)
                 logs = self.render_api.get_service_logs(service_id, tail=min(lines, 200))

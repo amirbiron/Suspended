@@ -375,31 +375,64 @@ class RenderAPI:
 		url = f"{self.base_url}/services/{service_id}/logs"
 		
 		params = {}
-		if tail:
-			params["tail"] = min(tail, 10000)  # Render מגביל ל-10000
+		# שימור כוונת המשתמש: אם tail==0, שלח 0; אם None, אל תשלח מפתח בכלל
+		if tail is not None:
+			params["tail"] = min(max(tail, 0), 10000)  # Render מגביל ל-10000
 		if start_time:
 			params["startTime"] = start_time
 		if end_time:
 			params["endTime"] = end_time
-		
+
+		def _parse_logs_payload(payload: Any) -> List[Dict[str, Any]]:
+			# תמיכה במבני JSON שונים
+			if isinstance(payload, list):
+				return cast(List[Dict[str, Any]], payload)
+			if isinstance(payload, dict):
+				# קודם חפש מפתחות עליונים מוכרים
+				for key in ("logs", "entries", "data", "items", "result"):
+					val = payload.get(key)
+					if isinstance(val, list):
+						return cast(List[Dict[str, Any]], val)
+				# אם לא נמצא, נסה עטיפות נפוצות פעם אחת
+				inner = payload.get("log") or payload.get("response")
+				if isinstance(inner, dict):
+					for k in ("logs", "entries", "data", "items"):
+						vv = inner.get(k)
+						if isinstance(vv, list):
+							return cast(List[Dict[str, Any]], vv)
+			return []
+
+		import logging
 		try:
-			response = requests.get(url, headers=self.headers, params=params, timeout=30)
-			if response.status_code != 200:
-				return []
-			
-			data = response.json()
-			
-			# Render מחזיר מבנה כמו: [{"id": "...", "timestamp": "...", "text": "...", "stream": "stdout"}]
-			# או: {"logs": [...]}
-			if isinstance(data, list):
-				return cast(List[Dict[str, Any]], data)
-			elif isinstance(data, dict):
-				logs = data.get("logs") or data.get("entries") or data.get("data") or []
-				return cast(List[Dict[str, Any]], logs)
-			
+			resp = requests.get(url, headers=self.headers, params=params, timeout=30)
+			if resp.status_code == 200:
+				return _parse_logs_payload(resp.json())
+			# נסה וריאציות פרמטרים חלופיות (חלק ממסמכי API ישנים/חדשים)
+			alt_params = dict(params)
+			# חלק מה-APIs משתמשים ב-limit במקום tail — שמור את הערך המקורי (כולל 0)
+			if "tail" in alt_params:
+				val = alt_params.pop("tail")
+				alt_params["limit"] = val if isinstance(val, int) else min(max(tail or 0, 0), 10000)
+			# חלק מה-APIs משתמשים ב-start/end במקום startTime/endTime
+			if "startTime" in alt_params:
+				alt_params["start"] = alt_params.pop("startTime")
+			if "endTime" in alt_params:
+				alt_params["end"] = alt_params.pop("endTime")
+			resp2 = requests.get(url, headers=self.headers, params=alt_params, timeout=30)
+			if resp2.status_code == 200:
+				return _parse_logs_payload(resp2.json())
+			# ניסיון אחרון: ללא פרמטרי זמן כלל
+			# אם המשתמש סיפק tail מפורש (כולל 0), נשמר את אותו ערך; אם לא — נשתמש בברירת מחדל גדולה
+			fallback_tail = min(max((tail if tail is not None else 500), 0), 10000)
+			fallback_params = {"tail": fallback_tail}
+			resp3 = requests.get(url, headers=self.headers, params=fallback_params, timeout=30)
+			if resp3.status_code == 200:
+				return _parse_logs_payload(resp3.json())
+			logging.warning(
+				f"Failed to fetch logs for {service_id}. codes: {resp.status_code}, {resp2.status_code}, {resp3.status_code}"
+			)
 			return []
 		except requests.RequestException as e:
-			import logging
 			logging.error(f"Error fetching logs for service {service_id}: {e}")
 			return []
 
@@ -415,15 +448,32 @@ class RenderAPI:
 		"""
 		from datetime import datetime, timezone, timedelta
 		
-		end_time = datetime.now(timezone.utc)
-		start_time = end_time - timedelta(minutes=minutes)
-		
-		return self.get_service_logs(
-			service_id,
-			tail=1000,
-			start_time=start_time.isoformat(),
-			end_time=end_time.isoformat()
-		)
+		# שלוף את האחרונים (ללא פרמטרי זמן) וסנן לוגית לפי timestamp
+		logs = self.get_service_logs(service_id, tail=1000)
+		if not logs:
+			return []
+		try:
+			end_time = datetime.now(timezone.utc)
+			start_time = end_time - timedelta(minutes=minutes)
+			filtered: List[Dict[str, Any]] = []
+			for entry in logs:
+				ts_raw = entry.get("timestamp")
+				if not isinstance(ts_raw, str):
+					continue
+				try:
+					iso = ts_raw.replace("Z", "+00:00") if isinstance(ts_raw, str) else ts_raw
+					ts = datetime.fromisoformat(iso)
+				except Exception:
+					# אם אין timestamp קריא, נשאיר את הלוג
+					filtered.append(entry)
+					continue
+				if start_time <= ts <= end_time:
+					filtered.append(entry)
+			records = filtered if filtered else logs
+			return records
+		except Exception:
+			# במקרה של בעיה בפרסינג, נחזיר את כל הלוגים
+			return logs
 
 
 # יצירת instance גלובלי
