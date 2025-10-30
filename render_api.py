@@ -375,8 +375,9 @@ class RenderAPI:
 		url = f"{self.base_url}/services/{service_id}/logs"
 		
 		params = {}
-		if tail:
-			params["tail"] = min(tail, 10000)  # Render מגביל ל-10000
+		# שימור כוונת המשתמש: אם tail==0, שלח 0; אם None, אל תשלח מפתח בכלל
+		if tail is not None:
+			params["tail"] = min(max(tail, 0), 10000)  # Render מגביל ל-10000
 		if start_time:
 			params["startTime"] = start_time
 		if end_time:
@@ -387,17 +388,18 @@ class RenderAPI:
 			if isinstance(payload, list):
 				return cast(List[Dict[str, Any]], payload)
 			if isinstance(payload, dict):
+				# קודם חפש מפתחות עליונים מוכרים
 				for key in ("logs", "entries", "data", "items", "result"):
 					val = payload.get(key)
 					if isinstance(val, list):
 						return cast(List[Dict[str, Any]], val)
-					# לעיתים מגיע עטוף: {"log": {"entries": [...]}}
-					inner = payload.get("log") or payload.get("response")
-					if isinstance(inner, dict):
-						for k in ("logs", "entries", "data", "items"):
-							vv = inner.get(k)
-							if isinstance(vv, list):
-								return cast(List[Dict[str, Any]], vv)
+				# אם לא נמצא, נסה עטיפות נפוצות פעם אחת
+				inner = payload.get("log") or payload.get("response")
+				if isinstance(inner, dict):
+					for k in ("logs", "entries", "data", "items"):
+						vv = inner.get(k)
+						if isinstance(vv, list):
+							return cast(List[Dict[str, Any]], vv)
 			return []
 
 		import logging
@@ -407,10 +409,10 @@ class RenderAPI:
 				return _parse_logs_payload(resp.json())
 			# נסה וריאציות פרמטרים חלופיות (חלק ממסמכי API ישנים/חדשים)
 			alt_params = dict(params)
-			# חלק מה-APIs משתמשים ב-limit במקום tail
+			# חלק מה-APIs משתמשים ב-limit במקום tail — שמור את הערך המקורי (כולל 0)
 			if "tail" in alt_params:
-				alt_params.pop("tail", None)
-				alt_params["limit"] = min(tail or 100, 10000)
+				val = alt_params.pop("tail")
+				alt_params["limit"] = val if isinstance(val, int) else min(max(tail or 0, 0), 10000)
 			# חלק מה-APIs משתמשים ב-start/end במקום startTime/endTime
 			if "startTime" in alt_params:
 				alt_params["start"] = alt_params.pop("startTime")
@@ -419,8 +421,10 @@ class RenderAPI:
 			resp2 = requests.get(url, headers=self.headers, params=alt_params, timeout=30)
 			if resp2.status_code == 200:
 				return _parse_logs_payload(resp2.json())
-			# ניסיון אחרון: ללא פרמטרי זמן כלל, רק tail/limit גדול
-			fallback_params = {"tail": min(max(tail or 100, 500), 10000)}
+			# ניסיון אחרון: ללא פרמטרי זמן כלל
+			# אם המשתמש סיפק tail מפורש (כולל 0), נשמר את אותו ערך; אם לא — נשתמש בברירת מחדל גדולה
+			fallback_tail = min(max((tail if tail is not None else 500), 0), 10000)
+			fallback_params = {"tail": fallback_tail}
 			resp3 = requests.get(url, headers=self.headers, params=fallback_params, timeout=30)
 			if resp3.status_code == 200:
 				return _parse_logs_payload(resp3.json())
