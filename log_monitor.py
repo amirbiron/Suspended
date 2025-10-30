@@ -3,8 +3,8 @@ import re
 import threading
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Set
-from collections import defaultdict
+from typing import Dict, List, Optional
+from collections import defaultdict, deque
 
 import config
 from database import db
@@ -23,7 +23,9 @@ class LogMonitor:
         self.check_interval = 60  # בדיקה כל דקה
         
         # קאש של לוגים שכבר נבדקו (למניעת התראות כפולות)
-        self.seen_errors: Dict[str, Set[str]] = defaultdict(set)
+        # משתמשים ב-deque לסדר כרונולוגי ו-set לחיפוש מהיר (O(1))
+        self.seen_errors_order: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        self.seen_errors_set: Dict[str, set] = defaultdict(set)
         
         # Patterns לזיהוי שגיאות
         self.error_patterns = [
@@ -124,7 +126,8 @@ class LogMonitor:
             log_id = log_entry.get("id", "")
             
             # דילוג על לוגים שכבר ראינו
-            if log_id and log_id in self.seen_errors[service_id]:
+            # בדיקה מהירה O(1) ב-set
+            if log_id and log_id in self.seen_errors_set[service_id]:
                 continue
             
             # בדיקה אם זה false positive
@@ -141,18 +144,22 @@ class LogMonitor:
                 
                 # סימון כראינו
                 if log_id:
-                    self.seen_errors[service_id].add(log_id)
+                    # בדיקה אם ה-deque מלא - אם כן, נסיר את הישן מה-set
+                    if len(self.seen_errors_order[service_id]) >= 1000:
+                        # ה-deque עומד להשליך את הישן ביותר - נסיר אותו גם מה-set
+                        oldest = self.seen_errors_order[service_id][0]
+                        self.seen_errors_set[service_id].discard(oldest)
+                    
+                    # הוספה ל-deque (ינקה אוטומטית את הישן אם מלא)
+                    self.seen_errors_order[service_id].append(log_id)
+                    # הוספה ל-set לחיפוש מהיר
+                    self.seen_errors_set[service_id].add(log_id)
                 
                 # בדיקה אם זו שגיאה קריטית
                 if self._is_critical_error(log_text):
                     critical_errors.append(error_info)
                 else:
                     errors_found.append(error_info)
-        
-        # ניקוי קאש ישן (שמור רק 1000 אחרונים)
-        if len(self.seen_errors[service_id]) > 1000:
-            old_ids = list(self.seen_errors[service_id])[:500]
-            self.seen_errors[service_id] = set(list(self.seen_errors[service_id])[500:])
         
         # שליחת התראות
         if critical_errors:
@@ -249,8 +256,10 @@ class LogMonitor:
             db.disable_log_monitoring(service_id, user_id)
             
             # ניקוי קאש
-            if service_id in self.seen_errors:
-                del self.seen_errors[service_id]
+            if service_id in self.seen_errors_order:
+                del self.seen_errors_order[service_id]
+            if service_id in self.seen_errors_set:
+                del self.seen_errors_set[service_id]
             
             logger.info(f"Log monitoring disabled for {service_id} by user {user_id}")
             return True
