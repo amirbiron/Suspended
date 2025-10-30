@@ -381,25 +381,54 @@ class RenderAPI:
 			params["startTime"] = start_time
 		if end_time:
 			params["endTime"] = end_time
-		
+
+		def _parse_logs_payload(payload: Any) -> List[Dict[str, Any]]:
+			# תמיכה במבני JSON שונים
+			if isinstance(payload, list):
+				return cast(List[Dict[str, Any]], payload)
+			if isinstance(payload, dict):
+				for key in ("logs", "entries", "data", "items", "result"):
+					val = payload.get(key)
+					if isinstance(val, list):
+						return cast(List[Dict[str, Any]], val)
+					# לעיתים מגיע עטוף: {"log": {"entries": [...]}}
+					inner = payload.get("log") or payload.get("response")
+					if isinstance(inner, dict):
+						for k in ("logs", "entries", "data", "items"):
+							vv = inner.get(k)
+							if isinstance(vv, list):
+								return cast(List[Dict[str, Any]], vv)
+			return []
+
+		import logging
 		try:
-			response = requests.get(url, headers=self.headers, params=params, timeout=30)
-			if response.status_code != 200:
-				return []
-			
-			data = response.json()
-			
-			# Render מחזיר מבנה כמו: [{"id": "...", "timestamp": "...", "text": "...", "stream": "stdout"}]
-			# או: {"logs": [...]}
-			if isinstance(data, list):
-				return cast(List[Dict[str, Any]], data)
-			elif isinstance(data, dict):
-				logs = data.get("logs") or data.get("entries") or data.get("data") or []
-				return cast(List[Dict[str, Any]], logs)
-			
+			resp = requests.get(url, headers=self.headers, params=params, timeout=30)
+			if resp.status_code == 200:
+				return _parse_logs_payload(resp.json())
+			# נסה וריאציות פרמטרים חלופיות (חלק ממסמכי API ישנים/חדשים)
+			alt_params = dict(params)
+			# חלק מה-APIs משתמשים ב-limit במקום tail
+			if "tail" in alt_params:
+				alt_params.pop("tail", None)
+				alt_params["limit"] = min(tail or 100, 10000)
+			# חלק מה-APIs משתמשים ב-start/end במקום startTime/endTime
+			if "startTime" in alt_params:
+				alt_params["start"] = alt_params.pop("startTime")
+			if "endTime" in alt_params:
+				alt_params["end"] = alt_params.pop("endTime")
+			resp2 = requests.get(url, headers=self.headers, params=alt_params, timeout=30)
+			if resp2.status_code == 200:
+				return _parse_logs_payload(resp2.json())
+			# ניסיון אחרון: ללא פרמטרי זמן כלל, רק tail/limit גדול
+			fallback_params = {"tail": min(max(tail or 100, 500), 10000)}
+			resp3 = requests.get(url, headers=self.headers, params=fallback_params, timeout=30)
+			if resp3.status_code == 200:
+				return _parse_logs_payload(resp3.json())
+			logging.warning(
+				f"Failed to fetch logs for {service_id}. codes: {resp.status_code}, {resp2.status_code}, {resp3.status_code}"
+			)
 			return []
 		except requests.RequestException as e:
-			import logging
 			logging.error(f"Error fetching logs for service {service_id}: {e}")
 			return []
 
@@ -415,15 +444,32 @@ class RenderAPI:
 		"""
 		from datetime import datetime, timezone, timedelta
 		
-		end_time = datetime.now(timezone.utc)
-		start_time = end_time - timedelta(minutes=minutes)
-		
-		return self.get_service_logs(
-			service_id,
-			tail=1000,
-			start_time=start_time.isoformat(),
-			end_time=end_time.isoformat()
-		)
+		# שלוף את האחרונים (ללא פרמטרי זמן) וסנן לוגית לפי timestamp
+		logs = self.get_service_logs(service_id, tail=1000)
+		if not logs:
+			return []
+		try:
+			end_time = datetime.now(timezone.utc)
+			start_time = end_time - timedelta(minutes=minutes)
+			filtered: List[Dict[str, Any]] = []
+			for entry in logs:
+				ts_raw = entry.get("timestamp")
+				if not isinstance(ts_raw, str):
+					continue
+				try:
+					iso = ts_raw.replace("Z", "+00:00") if isinstance(ts_raw, str) else ts_raw
+					ts = datetime.fromisoformat(iso)
+				except Exception:
+					# אם אין timestamp קריא, נשאיר את הלוג
+					filtered.append(entry)
+					continue
+				if start_time <= ts <= end_time:
+					filtered.append(entry)
+			records = filtered if filtered else logs
+			return records
+		except Exception:
+			# במקרה של בעיה בפרסינג, נחזיר את כל הלוגים
+			return logs
 
 
 # יצירת instance גלובלי
