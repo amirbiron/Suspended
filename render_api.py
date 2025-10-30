@@ -357,6 +357,125 @@ class RenderAPI:
 			return False
 		return None
 
+	# ===== משתני סביבה =====
+
+	def get_env_vars(self, service_id: str) -> List[Dict[str, Any]]:
+		"""קבלת רשימת משתני הסביבה של שירות
+		
+		Returns:
+			רשימת אובייקטי env var, כל אחד עם: key, value (אם לא סודי)
+		"""
+		url = f"{self.base_url}/services/{service_id}/env-vars"
+		
+		try:
+			response = requests.get(url, headers=self.headers, timeout=15)
+			if response.status_code == 200:
+				data = response.json()
+				# טיפול במבני JSON שונים
+				if isinstance(data, list):
+					return cast(List[Dict[str, Any]], data)
+				elif isinstance(data, dict):
+					# חיפוש במפתחות מוכרים
+					for key in ("envVars", "env_vars", "data", "items", "result"):
+						val = data.get(key)
+						if isinstance(val, list):
+							return cast(List[Dict[str, Any]], val)
+			return []
+		except requests.RequestException as e:
+			import logging
+			logging.error(f"Error fetching env vars for service {service_id}: {e}")
+			return []
+
+	def update_env_var(self, service_id: str, key: str, value: str) -> Dict[str, Any]:
+		"""עדכון או הוספת משתנה סביבה בודד לשירות
+		
+		Args:
+			service_id: מזהה השירות
+			key: שם המשתנה
+			value: ערך המשתנה
+		
+		Returns:
+			מילון עם success, status_code, message
+		"""
+		url = f"{self.base_url}/services/{service_id}/env-vars/{key}"
+		
+		payload = {"value": value}
+		
+		try:
+			# נסה PATCH תחילה (עדכון)
+			response = requests.patch(url, headers=self.headers, json=payload, timeout=15)
+			
+			if response.status_code in [200, 201]:
+				return {
+					"success": True,
+					"status_code": response.status_code,
+					"message": f"Environment variable '{key}' updated successfully"
+				}
+			elif response.status_code == 404:
+				# המשתנה לא קיים, ננסה ליצור
+				create_url = f"{self.base_url}/services/{service_id}/env-vars"
+				create_payload = {"key": key, "value": value}
+				create_response = requests.post(create_url, headers=self.headers, json=create_payload, timeout=15)
+				
+				if create_response.status_code in [200, 201]:
+					return {
+						"success": True,
+						"status_code": create_response.status_code,
+						"message": f"Environment variable '{key}' created successfully"
+					}
+				else:
+					return {
+						"success": False,
+						"status_code": create_response.status_code,
+						"message": f"Failed to create env var: {create_response.text}"
+					}
+			else:
+				return {
+					"success": False,
+					"status_code": response.status_code,
+					"message": f"Failed to update: {response.text}"
+				}
+		except requests.RequestException as e:
+			return {
+				"success": False,
+				"status_code": 0,
+				"message": f"Request failed: {str(e)}"
+			}
+
+	def delete_env_var(self, service_id: str, key: str) -> Dict[str, Any]:
+		"""מחיקת משתנה סביבה משירות
+		
+		Args:
+			service_id: מזהה השירות
+			key: שם המשתנה למחיקה
+		
+		Returns:
+			מילון עם success, status_code, message
+		"""
+		url = f"{self.base_url}/services/{service_id}/env-vars/{key}"
+		
+		try:
+			response = requests.delete(url, headers=self.headers, timeout=15)
+			
+			if response.status_code in [200, 204]:
+				return {
+					"success": True,
+					"status_code": response.status_code,
+					"message": f"Environment variable '{key}' deleted successfully"
+				}
+			else:
+				return {
+					"success": False,
+					"status_code": response.status_code,
+					"message": f"Failed to delete: {response.text}"
+				}
+		except requests.RequestException as e:
+			return {
+				"success": False,
+				"status_code": 0,
+				"message": f"Request failed: {str(e)}"
+			}
+
 	# ===== לוגים =====
 
 	def get_service_logs(self, service_id: str, tail: int = 100, start_time: Optional[str] = None,
