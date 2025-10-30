@@ -184,11 +184,14 @@ class RenderMonitorBot:
             BotCommand("logs", "📋 צפייה בלוגים של שירות"),
             BotCommand("errors", "🔥 צפייה רק בשגיאות"),
             BotCommand("logs_monitor", "🔍 הפעלת ניטור לוגים"),
-            BotCommand("logs_unmonitor", "🔇 כיבוי ניטור לוגים"),
-            BotCommand("logs_manage", "🎛️ ניהול ניטור לוגים"),
-            # Alias נוח ללא קו תחתון
-            BotCommand("logsmanage", "🎛️ ניהול ניטור לוגים (כינוי)"),
-            BotCommand("help", "❓ עזרה ומידע"),
+        		BotCommand("logs_unmonitor", "🔇 כיבוי ניטור לוגים"),
+        		BotCommand("logs_manage", "🎛️ ניהול ניטור לוגים"),
+        		# Alias נוח ללא קו תחתון
+        		BotCommand("logsmanage", "🎛️ ניהול ניטור לוגים (כינוי)"),
+        		BotCommand("env_list", "📝 רשימת משתני סביבה"),
+        		BotCommand("env_set", "✏️ עדכון משתנה סביבה"),
+        		BotCommand("env_delete", "🗑️ מחיקת משתנה סביבה"),
+        		BotCommand("help", "❓ עזרה ומידע"),
         ]
 
         # הגדרת הפקודות בבוט לאחר שהלולאה פעילה
@@ -226,6 +229,11 @@ class RenderMonitorBot:
         # Alias ללא קו תחתון עבור נוחות המשתמשים
         self.app.add_handler(CommandHandler("logsmanage", self.logs_manage_command))
 
+        # Environment variables commands
+        self.app.add_handler(CommandHandler("env_list", self.env_list_command))
+        self.app.add_handler(CommandHandler("env_set", self.env_set_command))
+        self.app.add_handler(CommandHandler("env_delete", self.env_delete_command))
+
         self.app.add_handler(
             CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$")
         )
@@ -258,6 +266,12 @@ class RenderMonitorBot:
                     "^enable_log_monitor_|^disable_log_monitor_|^log_detail_|^back_to_logs_list|"
                     "^refresh_logs_manage|^show_logs_monitored_only|^set_log_threshold_"
                 ),
+            )
+        )
+        self.app.add_handler(
+            CallbackQueryHandler(
+                self.env_action_callback,
+                pattern="^confirm_env_set_|^confirm_env_delete_|^cancel_env_action",
             )
         )
 
@@ -308,6 +322,15 @@ class RenderMonitorBot:
 /logs_monitor [service_id] [threshold] - הפעלת ניטור לוגים
 /logs_unmonitor [service_id] - כיבוי ניטור לוגים
 /logs_manage - ניהול ניטור לוגים עם כפתורים
+
+*ניהול משתני סביבה:* 🆕
+/env_list [service_id] - הצגת משתני סביבה של שירות
+/env_set [service_id] [key] [value] - עדכון/הוספת משתנה
+/env_delete [service_id] [key] - מחיקת משתנה
+  דוגמאות:
+    /env_list srv-123456
+    /env_set srv-123456 API_KEY new_value_here
+    /env_delete srv-123456 OLD_VAR
 
 *אדמין:*
 /delete_service [service_id] - מחיקת שירות מה-DB בלבד
@@ -1862,6 +1885,316 @@ class RenderMonitorBot:
         message += "בחר שירות לניהול:"
 
         await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
+    # ===== פקודות משתני סביבה =====
+
+    async def env_list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        	"""הצגת משתני סביבה של שירות (אדמין בלבד)"""
+        	msg = update.message
+        	if msg is None:
+        		return
+        	
+        	user = update.effective_user
+        	if not self._is_admin_user(user):
+        		await msg.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
+        		return
+        	
+        	if not context.args:
+        		await msg.reply_text(
+        			"❌ חסר service ID\n\n"
+        			"שימוש: `/env_list [service_id]`\n\n"
+        			"דוגמה: `/env_list srv-123456`",
+        			parse_mode="Markdown"
+        		)
+        		return
+        	
+        	service_id = context.args[0]
+        	
+        	# בדיקה אם השירות קיים
+        	service_info = self.render_api.get_service_info(service_id)
+        	if not service_info:
+        		await msg.reply_text(
+        			f"❌ השירות לא נמצא ב-Render או שה-ID שגוי\n\n"
+        			f"בדוק את המזהה: `{service_id}`",
+        			parse_mode="Markdown"
+        		)
+        		return
+        	
+        	service_name = service_info.get("name", service_id)
+        	
+        	await msg.reply_text(f"📋 מביא רשימת משתני סביבה של *{service_name}*...", parse_mode="Markdown")
+        	
+        	try:
+        		env_vars = self.render_api.get_env_vars(service_id)
+        		
+        		if not env_vars:
+        			await msg.reply_text(
+        				f"📭 לא נמצאו משתני סביבה לשירות *{service_name}*\n\n"
+        				f"ייתכן שהשירות חדש או שאין הרשאות מתאימות",
+        				parse_mode="Markdown"
+        			)
+        			return
+        		
+        		message = f"📝 *משתני סביבה של {service_name}*\n\n"
+        		message += f"🆔 Service ID: `{service_id}`\n"
+        		message += f"📊 סה\"כ משתנים: {len(env_vars)}\n\n"
+        		
+        		# מיון לפי שם
+        		sorted_vars = sorted(env_vars, key=lambda x: x.get("key", ""))
+        		
+        		for env_var in sorted_vars:
+        			key = env_var.get("key", "")
+        			value = env_var.get("value")
+        			
+        			# Render לא מחזיר ערכים של משתנים סודיים
+        			if value is None or value == "":
+        				message += f"🔐 `{key}`: *[מוסתר/סודי]*\n"
+        			else:
+        				# הצגת חלק מהערך (לא הכל מסיבות אבטחה)
+        				display_value = str(value)
+        				if len(display_value) > 50:
+        					display_value = display_value[:47] + "..."
+        				# Escape characters for Markdown
+        				display_value = display_value.replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+        				message += f"📌 `{key}`: `{display_value}`\n"
+        		
+        		message += f"\n💡 **טיפים:**\n"
+        		message += f"• עדכון משתנה: `/env_set {service_id} KEY value`\n"
+        		message += f"• מחיקת משתנה: `/env_delete {service_id} KEY`\n"
+        		message += f"⚠️ שינוי משתני סביבה עשוי לגרום לדיפלוי מחדש של השירות"
+        		
+        		await msg.reply_text(message, parse_mode="Markdown")
+        		
+        	except Exception as e:
+        		await msg.reply_text(f"❌ שגיאה בקבלת משתני סביבה: {e}")
+
+    async def env_set_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        	"""עדכון או הוספת משתנה סביבה (אדמין בלבד)"""
+        	msg = update.message
+        	if msg is None:
+        		return
+        	
+        	user = update.effective_user
+        	if not self._is_admin_user(user):
+        		await msg.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
+        		return
+        	
+        	if len(context.args) < 3:
+        		await msg.reply_text(
+        			"❌ חסרים פרמטרים\n\n"
+        			"שימוש: `/env_set [service_id] [key] [value]`\n\n"
+        			"דוגמאות:\n"
+        			"• `/env_set srv-123456 API_KEY new_api_key_value`\n"
+        			"• `/env_set srv-123456 DEBUG true`\n"
+        			"• `/env_set srv-123456 DATABASE_URL postgresql://...`\n\n"
+        			"⚠️ שינוי משתני סביבה עשוי לגרום לדיפלוי מחדש",
+        			parse_mode="Markdown"
+        		)
+        		return
+        	
+        	service_id = context.args[0]
+        	key = context.args[1]
+        	# Value יכול להכיל רווחים, לכן נקח את כל השאר
+        	value = " ".join(context.args[2:])
+        	
+        	# בדיקה אם השירות קיים
+        	service_info = self.render_api.get_service_info(service_id)
+        	if not service_info:
+        		await msg.reply_text(
+        			f"❌ השירות לא נמצא ב-Render או שה-ID שגוי\n\n"
+        			f"בדוק את המזהה: `{service_id}`",
+        			parse_mode="Markdown"
+        		)
+        		return
+        	
+        	service_name = service_info.get("name", service_id)
+        	
+        	# אישור מהמשתמש
+        	confirm_message = f"⚠️ **אישור עדכון משתנה סביבה**\n\n"
+        	confirm_message += f"🤖 שירות: *{service_name}*\n"
+        	confirm_message += f"🆔 ID: `{service_id}`\n"
+        	confirm_message += f"🔑 משתנה: `{key}`\n"
+        	confirm_message += f"📝 ערך חדש: `{value[:50]}{'...' if len(value) > 50 else ''}`\n\n"
+        	confirm_message += "האם אתה בטוח? פעולה זו עשויה לגרום לדיפלוי מחדש של השירות."
+        	
+        	keyboard = [
+        		[
+        			InlineKeyboardButton("✅ כן, עדכן", callback_data=f"confirm_env_set_{service_id}_{key}"),
+        			InlineKeyboardButton("❌ בטל", callback_data="cancel_env_action"),
+        		]
+        	]
+        	
+        	# שמירת הערך בזיכרון זמני (context.user_data)
+        	if context.user_data is not None:
+        		context.user_data[f"env_value_{service_id}_{key}"] = value
+        	
+        	await msg.reply_text(
+        		confirm_message,
+        		reply_markup=InlineKeyboardMarkup(keyboard),
+        		parse_mode="Markdown"
+        	)
+
+    async def env_delete_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        	"""מחיקת משתנה סביבה (אדמין בלבד)"""
+        	msg = update.message
+        	if msg is None:
+        		return
+        	
+        	user = update.effective_user
+        	if not self._is_admin_user(user):
+        		await msg.reply_text("❌ פקודה זו זמינה רק למנהל המערכת")
+        		return
+        	
+        	if len(context.args) < 2:
+        		await msg.reply_text(
+        			"❌ חסרים פרמטרים\n\n"
+        			"שימוש: `/env_delete [service_id] [key]`\n\n"
+        			"דוגמה: `/env_delete srv-123456 OLD_API_KEY`\n\n"
+        			"⚠️ פעולה זו בלתי הפיכה ועשויה לגרום לדיפלוי מחדש",
+        			parse_mode="Markdown"
+        		)
+        		return
+        	
+        	service_id = context.args[0]
+        	key = context.args[1]
+        	
+        	# בדיקה אם השירות קיים
+        	service_info = self.render_api.get_service_info(service_id)
+        	if not service_info:
+        		await msg.reply_text(
+        			f"❌ השירות לא נמצא ב-Render או שה-ID שגוי\n\n"
+        			f"בדוק את המזהה: `{service_id}`",
+        			parse_mode="Markdown"
+        		)
+        		return
+        	
+        	service_name = service_info.get("name", service_id)
+        	
+        	# אישור מהמשתמש
+        	confirm_message = f"⚠️ **אישור מחיקת משתנה סביבה**\n\n"
+        	confirm_message += f"🤖 שירות: *{service_name}*\n"
+        	confirm_message += f"🆔 ID: `{service_id}`\n"
+        	confirm_message += f"🗑️ משתנה למחיקה: `{key}`\n\n"
+        	confirm_message += "האם אתה בטוח? פעולה זו בלתי הפיכה ועשויה לגרום לדיפלוי מחדש."
+        	
+        	keyboard = [
+        		[
+        			InlineKeyboardButton("✅ כן, מחק", callback_data=f"confirm_env_delete_{service_id}_{key}"),
+        			InlineKeyboardButton("❌ בטל", callback_data="cancel_env_action"),
+        		]
+        	]
+        	
+        	await msg.reply_text(
+        		confirm_message,
+        		reply_markup=InlineKeyboardMarkup(keyboard),
+        		parse_mode="Markdown"
+        	)
+
+    async def env_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        	"""טיפול באישורי עדכון/מחיקה של משתני סביבה"""
+        	query = update.callback_query
+        	if query is None or query.data is None:
+        		return
+
+        	data = query.data
+        	user = query.from_user
+        	if user is None:
+        		return
+
+        	# בדיקת הרשאות אדמין
+        	if not self._is_admin_user(user):
+        		await query.answer("❌ אין הרשאה", show_alert=True)
+        		return
+
+        	if data == "cancel_env_action":
+        		await query.answer()
+        		await query.edit_message_text("❌ הפעולה בוטלה")
+        		return
+
+        	if data.startswith("confirm_env_set_"):
+        		# פורמט: confirm_env_set_SERVICE_ID_KEY
+        		parts = data.replace("confirm_env_set_", "").split("_", 1)
+        		if len(parts) < 2:
+        			await query.answer("❌ שגיאה בפורמט הנתונים", show_alert=True)
+        			return
+        		
+        		service_id = parts[0]
+        		key = parts[1]
+        		
+        		# שליפת הערך מהזיכרון הזמני
+        		value_key = f"env_value_{service_id}_{key}"
+        		if context.user_data is None or value_key not in context.user_data:
+        			await query.answer("❌ הערך לא נמצא בזיכרון, נסה שוב", show_alert=True)
+        			return
+        		
+        		value = context.user_data[value_key]
+        		
+        		await query.answer()
+        		await query.edit_message_text("⏳ מעדכן משתנה סביבה...")
+        		
+        		# ביצוע העדכון
+        		result = self.render_api.update_env_var(service_id, key, value)
+        		
+        		# ניקוי הזיכרון
+        		del context.user_data[value_key]
+        		
+        		if result["success"]:
+        			service_info = self.render_api.get_service_info(service_id)
+        			service_name = service_info.get("name", service_id) if service_info else service_id
+        			
+        			message = f"✅ *עדכון מוצלח!*\n\n"
+        			message += f"🤖 שירות: *{service_name}*\n"
+        			message += f"🆔 ID: `{service_id}`\n"
+        			message += f"🔑 משתנה: `{key}`\n"
+        			message += f"✨ {result['message']}\n\n"
+        			message += "⚠️ השירות עשוי לעבור דיפלוי מחדש כעת.\n"
+        			message += f"💡 הקש `/env_list {service_id}` לראות את כל המשתנים"
+        			
+        			await query.edit_message_text(message, parse_mode="Markdown")
+        		else:
+        			await query.edit_message_text(
+        				f"❌ *כשלון בעדכון*\n\n"
+        				f"שגיאה: {result['message']}\n"
+        				f"קוד: {result['status_code']}",
+        				parse_mode="Markdown"
+        			)
+
+        	elif data.startswith("confirm_env_delete_"):
+        		# פורמט: confirm_env_delete_SERVICE_ID_KEY
+        		parts = data.replace("confirm_env_delete_", "").split("_", 1)
+        		if len(parts) < 2:
+        			await query.answer("❌ שגיאה בפורמט הנתונים", show_alert=True)
+        			return
+        		
+        		service_id = parts[0]
+        		key = parts[1]
+        		
+        		await query.answer()
+        		await query.edit_message_text("⏳ מוחק משתנה סביבה...")
+        		
+        		# ביצוע המחיקה
+        		result = self.render_api.delete_env_var(service_id, key)
+        		
+        		if result["success"]:
+        			service_info = self.render_api.get_service_info(service_id)
+        			service_name = service_info.get("name", service_id) if service_info else service_id
+        			
+        			message = f"✅ *מחיקה מוצלחת!*\n\n"
+        			message += f"🤖 שירות: *{service_name}*\n"
+        			message += f"🆔 ID: `{service_id}`\n"
+        			message += f"🗑️ משתנה נמחק: `{key}`\n"
+        			message += f"✨ {result['message']}\n\n"
+        			message += "⚠️ השירות עשוי לעבור דיפלוי מחדש כעת.\n"
+        			message += f"💡 הקש `/env_list {service_id}` לראות את כל המשתנים"
+        			
+        			await query.edit_message_text(message, parse_mode="Markdown")
+        		else:
+        			await query.edit_message_text(
+        				f"❌ *כשלון במחיקה*\n\n"
+        				f"שגיאה: {result['message']}\n"
+        				f"קוד: {result['status_code']}",
+        				parse_mode="Markdown"
+        			)
 
 
 # ✨ פונקציה שמטפלת בשגיאות
