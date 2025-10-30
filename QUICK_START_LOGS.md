@@ -40,7 +40,13 @@ python main.py
 
 ### שלב 2: צפה בלוגים
 ```
-/logs srv-your-service-id
+/logs srv-your-service-id [lines] [minutes]
+```
+
+**דוגמאות:**
+```bash
+/logs srv-123 100       # 100 שורות אחרונות
+/logs srv-123 100 5     # 100 שורות מה-5 דקות האחרונות
 ```
 
 ### שלב 3: הפעל ניטור אוטומטי

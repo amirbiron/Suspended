@@ -286,7 +286,10 @@ class RenderMonitorBot:
 /diag - דיאגנוסטיקה מהירה
 
 *פקודות ניטור לוגים:* 🆕
-/logs [service_id] [lines] - צפייה בלוגים של שירות
+/logs [service_id] [lines] [minutes] - צפייה בלוגים
+  • lines - כמה שורות (ברירת מחדל: 100)
+  • minutes - מכמה דקות אחורה (אופציונלי)
+  דוגמה: /logs srv-123 100 5 (100 שורות מה-5 דקות האחרונות)
 /logs_monitor [service_id] [threshold] - הפעלת ניטור לוגים
 /logs_unmonitor [service_id] - כיבוי ניטור לוגים
 /logs_manage - ניהול ניטור לוגים עם כפתורים
@@ -1332,25 +1335,46 @@ class RenderMonitorBot:
         if not context.args:
             await msg.reply_text(
                 "❌ חסר service ID\n\n"
-                "שימוש: `/logs [service_id] [lines]`\n\n"
-                "דוגמה: `/logs srv-123456 50`\n"
-                "ברירת מחדל: 100 שורות אחרונות",
+                "**שימוש:**\n"
+                "`/logs [service_id] [lines] [minutes]`\n\n"
+                "**פרמטרים:**\n"
+                "• `lines` - כמה שורות להציג (ברירת מחדל: 100, מקס: 200)\n"
+                "• `minutes` - מכמה דקות אחורה (ברירת מחדל: כל הזמן)\n\n"
+                "**דוגמאות:**\n"
+                "`/logs srv-123456` - 100 שורות אחרונות\n"
+                "`/logs srv-123456 50` - 50 שורות אחרונות\n"
+                "`/logs srv-123456 100 5` - 100 שורות מה-5 דקות האחרונות\n"
+                "`/logs srv-123456 200 30` - 200 שורות מה-30 דקות האחרונות\n\n"
+                "💡 **טיפ:** השורות מוצגות מהישן לחדש (כרונולוגית)",
                 parse_mode="Markdown"
             )
             return
 
         service_id = context.args[0]
         lines = int(context.args[1]) if len(context.args) > 1 else 100
+        minutes = int(context.args[2]) if len(context.args) > 2 else None
 
         # בדיקה אם השירות קיים
         service = self.db.get_service_activity(service_id)
         service_name = service.get("service_name", service_id) if service else service_id
 
-        await msg.reply_text(f"📋 מביא לוגים של *{service_name}*...", parse_mode="Markdown")
+        # הודעת סטטוס
+        time_range = f"מה-{minutes} דקות האחרונות" if minutes else "הכי אחרונים"
+        await msg.reply_text(
+            f"📋 מביא {lines} לוגים {time_range} של *{service_name}*...",
+            parse_mode="Markdown"
+        )
 
         try:
             # קבלת הלוגים
-            logs = self.render_api.get_service_logs(service_id, tail=min(lines, 200))
+            if minutes:
+                # לוגים מטווח זמן ספציפי
+                logs = self.render_api.get_recent_logs(service_id, minutes=minutes)
+                # הגבלה למספר השורות המבוקש
+                logs = logs[-lines:] if len(logs) > lines else logs
+            else:
+                # לוגים אחרונים (ברירת מחדל)
+                logs = self.render_api.get_service_logs(service_id, tail=min(lines, 200))
             
             if not logs:
                 await msg.reply_text("📭 לא נמצאו לוגים לשירות זה")
@@ -1362,6 +1386,28 @@ class RenderMonitorBot:
 
             # הצגת הלוגים (מוגבל לתווים בטלגרם)
             message = f"📋 *לוגים של {service_name}*\n\n"
+            
+            # הוספת מידע על טווח זמן
+            if logs and len(logs) > 0:
+                first_log = logs[0]
+                last_log = logs[-1]
+                first_time = first_log.get("timestamp", "")
+                last_time = last_log.get("timestamp", "")
+                
+                if first_time and last_time:
+                    # המרה לפורמט קריא
+                    from datetime import datetime
+                    try:
+                        first_dt = datetime.fromisoformat(first_time.replace('Z', '+00:00'))
+                        last_dt = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
+                        message += f"🕐 טווח: {first_dt.strftime('%H:%M:%S')} - {last_dt.strftime('%H:%M:%S')}\n"
+                    except:
+                        pass
+            
+            message += f"📊 סה\"כ: {len(logs)} שורות"
+            if minutes:
+                message += f" (מה-{minutes} דקות האחרונות)"
+            message += "\n\n"
             
             if stderr_logs:
                 message += "🔴 *STDERR (שגיאות):*\n"
@@ -1383,8 +1429,11 @@ class RenderMonitorBot:
                 text = text.replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
                 message += f"```\n{text}\n```\n"
 
-            message += f"\n\n💡 סה\"כ: {len(logs)} שורות\n"
-            message += f"💡 הקש `/logs_monitor {service_id}` להפעלת ניטור אוטומטי"
+            message += f"\n\n💡 **עצות:**\n"
+            message += f"• הקש `/logs_monitor {service_id}` להפעלת ניטור אוטומטי\n"
+            if not minutes:
+                message += f"• הוסף פרמטר זמן: `/logs {service_id} 100 5` (5 דקות אחרונות)\n"
+            message += f"• השורות מוצגות מהישן לחדש (כרונולוגית)"
 
             await msg.reply_text(message, parse_mode="Markdown")
 
