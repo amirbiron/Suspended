@@ -37,6 +37,21 @@ except Exception:
 
     status_monitor = _FallbackStatusMonitor()
 
+try:
+    from log_monitor import log_monitor  # Log monitoring import
+except Exception:
+    # Fallback for log_monitor
+    class _FallbackLogMonitor:
+        def __getattr__(self, name):
+            def _noop(*args, **kwargs):
+                logging.getLogger(__name__).warning(
+                    "Fallback log_monitor noop called: %s", name
+                )
+                return None
+            return _noop
+    
+    log_monitor = _FallbackLogMonitor()
+
 # הגדרת לוגים - המקום הטוב ביותר הוא כאן, פעם אחת בתחילת הקובץ
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
@@ -165,6 +180,10 @@ class RenderMonitorBot:
             BotCommand("monitor", "🔔 הפעלת ניטור סטטוס"),
             BotCommand("unmonitor", "🔕 כיבוי ניטור סטטוס"),
             BotCommand("test_monitor", "🧪 בדיקת ניטור"),
+            BotCommand("logs", "📋 צפייה בלוגים של שירות"),
+            BotCommand("logs_monitor", "🔍 הפעלת ניטור לוגים"),
+            BotCommand("logs_unmonitor", "🔇 כיבוי ניטור לוגים"),
+            BotCommand("logs_manage", "🎛️ ניהול ניטור לוגים"),
             BotCommand("help", "❓ עזרה ומידע"),
         ]
 
@@ -194,6 +213,12 @@ class RenderMonitorBot:
         # Cleanup command for test data
         self.app.add_handler(CommandHandler("clear_test_data", self.clear_test_data_command))
 
+        # Log monitoring commands
+        self.app.add_handler(CommandHandler("logs", self.logs_command))
+        self.app.add_handler(CommandHandler("logs_monitor", self.logs_monitor_command))
+        self.app.add_handler(CommandHandler("logs_unmonitor", self.logs_unmonitor_command))
+        self.app.add_handler(CommandHandler("logs_manage", self.logs_manage_command))
+
         self.app.add_handler(
             CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$")
         )
@@ -216,6 +241,15 @@ class RenderMonitorBot:
                 pattern=(
                     "^enable_monitor_|^disable_monitor_|^back_to_monitor_list|^refresh_"
                     "monitor_manage|^show_monitored_only|^enable_deploy_notif_|^disable_deploy_notif_"
+                ),
+            )
+        )
+        self.app.add_handler(
+            CallbackQueryHandler(
+                self.logs_action_callback,
+                pattern=(
+                    "^enable_log_monitor_|^disable_log_monitor_|^log_detail_|^back_to_logs_list|"
+                    "^refresh_logs_manage|^show_logs_monitored_only|^set_log_threshold_"
                 ),
             )
         )
@@ -249,17 +283,23 @@ class RenderMonitorBot:
 /monitor_manage - ניהול ניטור עם כפתורים
 /list_monitored - רשימת שירותים בניטור סטטוס
 /test_monitor [service_id] [action] - בדיקת התראות
-/clear_test_data - ניקוי נתוני בדיקות
 /diag - דיאגנוסטיקה מהירה
 
-/delete_service [service_id] - (אדמין) מחיקת שירות מה-DB בלבד
+*פקודות ניטור לוגים:* 🆕
+/logs [service_id] [lines] - צפייה בלוגים של שירות
+/logs_monitor [service_id] [threshold] - הפעלת ניטור לוגים
+/logs_unmonitor [service_id] - כיבוי ניטור לוגים
+/logs_manage - ניהול ניטור לוגים עם כפתורים
+
+*אדמין:*
+/delete_service [service_id] - מחיקת שירות מה-DB בלבד
+/clear_test_data - ניקוי נתוני בדיקות
 
 מידע חשוב:
-• פעולה זו בלתי הפיכה — לא ניתן לשחזר.
-• המחיקה מתבצעת רק מהמסד, לא מ-Render.
-• מה יימחק: `service_activity`, `user_interactions`, `manual_actions`, `status_changes`, `deploy_events`.
-• איך למצוא ID: דרך `/status` או מדשבורד Render.
-• דוגמה: `/delete_service srv-1234567890`
+• ניטור לוגים: זיהוי אוטומטי של שגיאות והתראות בזמן אמת
+• סף שגיאות: קובע כמה שגיאות נדרשות להתראה (ברירת מחדל: 5)
+• איך למצוא ID: דרך `/status` או מדשבורד Render
+• דוגמה: `/logs srv-1234567890 100`
 
 /help - הצגת הודעה זו
         """
@@ -1281,6 +1321,347 @@ class RenderMonitorBot:
             test_message += f"➡️ סטטוס חדש: {safe_new}\n"
             send_notification(test_message)
 
+    # ===== פקודות ניטור לוגים =====
+
+    async def logs_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """צפייה בלוגים של שירות"""
+        msg = update.message
+        if msg is None:
+            return
+        
+        if not context.args:
+            await msg.reply_text(
+                "❌ חסר service ID\n\n"
+                "שימוש: `/logs [service_id] [lines]`\n\n"
+                "דוגמה: `/logs srv-123456 50`\n"
+                "ברירת מחדל: 100 שורות אחרונות",
+                parse_mode="Markdown"
+            )
+            return
+
+        service_id = context.args[0]
+        lines = int(context.args[1]) if len(context.args) > 1 else 100
+
+        # בדיקה אם השירות קיים
+        service = self.db.get_service_activity(service_id)
+        service_name = service.get("service_name", service_id) if service else service_id
+
+        await msg.reply_text(f"📋 מביא לוגים של *{service_name}*...", parse_mode="Markdown")
+
+        try:
+            # קבלת הלוגים
+            logs = self.render_api.get_service_logs(service_id, tail=min(lines, 200))
+            
+            if not logs:
+                await msg.reply_text("📭 לא נמצאו לוגים לשירות זה")
+                return
+
+            # פיצול ללוגים של stdout ו-stderr
+            stdout_logs = [log for log in logs if log.get("stream") == "stdout"]
+            stderr_logs = [log for log in logs if log.get("stream") == "stderr"]
+
+            # הצגת הלוגים (מוגבל לתווים בטלגרם)
+            message = f"📋 *לוגים של {service_name}*\n\n"
+            
+            if stderr_logs:
+                message += "🔴 *STDERR (שגיאות):*\n"
+                for log in stderr_logs[-10:]:  # 10 אחרונים
+                    text = log.get("text", "")[:200]
+                    text = text.replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+                    message += f"```\n{text}\n```\n"
+                
+                if len(message) > 3500:
+                    await msg.reply_text(message[:3500] + "\n\n_...קיצור בגלל הגבלת אורך_", parse_mode="Markdown")
+                    message = f"\n\n📝 *STDOUT (פלט רגיל):*\n"
+                else:
+                    message += f"\n\n📝 *STDOUT (פלט רגיל):*\n"
+
+            for log in stdout_logs[-10:]:  # 10 אחרונים
+                if len(message) > 3500:
+                    break
+                text = log.get("text", "")[:200]
+                text = text.replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+                message += f"```\n{text}\n```\n"
+
+            message += f"\n\n💡 סה\"כ: {len(logs)} שורות\n"
+            message += f"💡 הקש `/logs_monitor {service_id}` להפעלת ניטור אוטומטי"
+
+            await msg.reply_text(message, parse_mode="Markdown")
+
+        except Exception as e:
+            await msg.reply_text(f"❌ שגיאה בקבלת לוגים: {e}")
+
+    async def logs_monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הפעלת ניטור לוגים לשירות"""
+        msg = update.message
+        if msg is None:
+            return
+        
+        if not context.args:
+            await msg.reply_text(
+                "❌ חסר service ID\n\n"
+                "שימוש: `/logs_monitor [service_id] [threshold]`\n\n"
+                "threshold = מספר שגיאות להתראה (ברירת מחדל: 5)\n"
+                "דוגמה: `/logs_monitor srv-123456 3`",
+                parse_mode="Markdown"
+            )
+            return
+
+        service_id = context.args[0]
+        threshold = int(context.args[1]) if len(context.args) > 1 else 5
+
+        user = update.effective_user
+        if user is None:
+            return
+        user_id = user.id
+
+        # הפעלת הניטור
+        if log_monitor.enable_monitoring(service_id, user_id, error_threshold=threshold):
+            await msg.reply_text(
+                f"✅ ניטור לוגים הופעל עבור השירות\n"
+                f"🔍 סף שגיאות: {threshold}\n\n"
+                f"תקבל התראה כאשר יזוהו {threshold}+ שגיאות בדקה"
+            )
+            # הפעל את לולאת הניטור אם לא רצה
+            try:
+                log_monitor.start_monitoring()
+            except Exception:
+                pass
+        else:
+            await msg.reply_text(
+                f"❌ לא הצלחתי להפעיל ניטור לוגים עבור {service_id}\n"
+                f"ודא שה-ID נכון ושהשירות קיים ב-Render"
+            )
+
+    async def logs_unmonitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """כיבוי ניטור לוגים לשירות"""
+        msg = update.message
+        if msg is None:
+            return
+        
+        if not context.args:
+            await msg.reply_text("❌ חסר service ID\nשימוש: /logs_unmonitor [service_id]")
+            return
+
+        service_id = context.args[0]
+        user = update.effective_user
+        if user is None:
+            return
+        user_id = user.id
+
+        # כיבוי הניטור
+        if log_monitor.disable_monitoring(service_id, user_id):
+            await msg.reply_text(f"✅ ניטור לוגים כובה עבור השירות {service_id}")
+        else:
+            await msg.reply_text(f"❌ לא הצלחתי לכבות ניטור לוגים עבור {service_id}")
+
+    async def logs_manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """ניהול ניטור לוגים דרך פקודה"""
+        msg = update.message
+        if msg is None:
+            return
+        
+        services = self.db.get_all_services()
+
+        if not services:
+            await msg.reply_text("📭 אין שירותים במערכת")
+            return
+
+        keyboard = []
+
+        for service in services:
+            service_id = service["_id"]
+            service_name = service.get("service_name", service_id)
+
+            # בדיקה אם ניטור לוגים מופעל
+            log_monitoring = service.get("log_monitoring", {})
+            is_monitored = log_monitoring.get("enabled", False)
+            
+            # אימוג'י ניטור
+            monitor_emoji = "🔍" if is_monitored else "💤"
+            
+            # התראה אם היו שגיאות לאחרונה
+            last_error_count = log_monitoring.get("last_error_count", 0)
+            error_emoji = "🔥" if last_error_count > 0 else ""
+
+            button_text = f"{monitor_emoji} {error_emoji} {service_name[:20]}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"log_detail_{service_id}")])
+
+        # כפתורים נוספים
+        keyboard.append([InlineKeyboardButton("📊 הצג רק מנוטרים", callback_data="show_logs_monitored_only")])
+        keyboard.append([InlineKeyboardButton("🔄 רענן", callback_data="refresh_logs_manage")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message = "🎛️ *ניהול ניטור לוגים*\n\n"
+        message += "🔍 = ניטור פעיל | 💤 = ניטור כבוי\n"
+        message += "🔥 = שגיאות זוהו לאחרונה\n\n"
+        message += "בחר שירות לניהול:"
+
+        await msg.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
+    async def logs_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """טיפול בפעולות ניטור לוגים"""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+
+        data = query.data
+        user = query.from_user
+        if user is None:
+            return
+        user_id = user.id
+
+        if data.startswith("enable_log_monitor_"):
+            service_id = data.replace("enable_log_monitor_", "")
+
+            if log_monitor.enable_monitoring(service_id, user_id):
+                await query.answer("✅ ניטור לוגים הופעל!", show_alert=True)
+                # רענון התצוגה
+                await self._show_log_detail(query, service_id)
+            else:
+                await query.answer("❌ שגיאה בהפעלת ניטור לוגים", show_alert=True)
+
+        elif data.startswith("disable_log_monitor_"):
+            service_id = data.replace("disable_log_monitor_", "")
+
+            if log_monitor.disable_monitoring(service_id, user_id):
+                await query.answer("✅ ניטור לוגים כובה!", show_alert=True)
+                # רענון התצוגה
+                await self._show_log_detail(query, service_id)
+            else:
+                await query.answer("❌ שגיאה בכיבוי ניטור לוגים", show_alert=True)
+
+        elif data.startswith("log_detail_"):
+            service_id = data.replace("log_detail_", "")
+            await query.answer()
+            await self._show_log_detail(query, service_id)
+
+        elif data == "back_to_logs_list":
+            await query.answer()
+            await self._refresh_logs_manage(query)
+
+        elif data == "refresh_logs_manage":
+            await query.answer()
+            await self._refresh_logs_manage(query)
+
+        elif data == "show_logs_monitored_only":
+            await query.answer()
+            await self._show_logs_monitored_only(query)
+
+    async def _show_log_detail(self, query: CallbackQuery, service_id: str):
+        """הצגת פרטי ניטור לוגים של שירות"""
+        service = self.db.get_service_activity(service_id)
+        if not service:
+            await query.edit_message_text("❌ שירות לא נמצא")
+            return
+
+        service_name = service.get("service_name", service_id)
+        log_monitoring = service.get("log_monitoring", {})
+        is_monitored = log_monitoring.get("enabled", False)
+        
+        message = f"🤖 *{service_name}*\n"
+        message += f"🆔 `{service_id}`\n\n"
+
+        if is_monitored:
+            message += "✅ *ניטור לוגים פעיל*\n"
+            threshold = log_monitoring.get("error_threshold", 5)
+            message += f"🎯 סף שגיאות: {threshold}\n"
+            
+            last_error_count = log_monitoring.get("last_error_count", 0)
+            if last_error_count > 0:
+                message += f"🔥 שגיאות אחרונות: {last_error_count}\n"
+                last_was_critical = log_monitoring.get("last_was_critical", False)
+                if last_was_critical:
+                    message += "⚠️ *שגיאה קריטית זוהתה!*\n"
+            
+            total_errors = log_monitoring.get("total_errors", 0)
+            message += f"📊 סה\"כ שגיאות: {total_errors}\n"
+        else:
+            message += "❌ *ניטור לוגים כבוי*\n"
+
+        # כפתורים
+        keyboard = []
+
+        if is_monitored:
+            keyboard.append([InlineKeyboardButton("🔇 כבה ניטור", callback_data=f"disable_log_monitor_{service_id}")])
+        else:
+            keyboard.append([InlineKeyboardButton("🔍 הפעל ניטור", callback_data=f"enable_log_monitor_{service_id}")])
+
+        keyboard.append([InlineKeyboardButton("🔙 חזור לרשימה", callback_data="back_to_logs_list")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
+    async def _refresh_logs_manage(self, query: CallbackQuery):
+        """רענון רשימת ניטור לוגים"""
+        services = self.db.get_all_services()
+
+        if not services:
+            await query.edit_message_text("📭 אין שירותים במערכת")
+            return
+
+        keyboard = []
+
+        for service in services:
+            service_id = service["_id"]
+            service_name = service.get("service_name", service_id)
+
+            log_monitoring = service.get("log_monitoring", {})
+            is_monitored = log_monitoring.get("enabled", False)
+            
+            monitor_emoji = "🔍" if is_monitored else "💤"
+            
+            last_error_count = log_monitoring.get("last_error_count", 0)
+            error_emoji = "🔥" if last_error_count > 0 else ""
+
+            button_text = f"{monitor_emoji} {error_emoji} {service_name[:20]}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"log_detail_{service_id}")])
+
+        keyboard.append([InlineKeyboardButton("📊 הצג רק מנוטרים", callback_data="show_logs_monitored_only")])
+        keyboard.append([InlineKeyboardButton("🔄 רענן", callback_data="refresh_logs_manage")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message = "🎛️ *ניהול ניטור לוגים*\n\n"
+        message += "🔍 = ניטור פעיל | 💤 = ניטור כבוי\n"
+        message += "🔥 = שגיאות זוהו לאחרונה\n\n"
+        message += "בחר שירות לניהול:"
+
+        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
+    async def _show_logs_monitored_only(self, query: CallbackQuery):
+        """הצגת רק שירותים עם ניטור לוגים פעיל"""
+        monitored_services = log_monitor.get_all_monitored_services()
+
+        if not monitored_services:
+            await query.answer("אין שירותים עם ניטור לוגים פעיל", show_alert=True)
+            return
+
+        keyboard = []
+
+        for service in monitored_services:
+            service_id = service["_id"]
+            service_name = service.get("service_name", service_id)
+            
+            log_monitoring = service.get("log_monitoring", {})
+            last_error_count = log_monitoring.get("last_error_count", 0)
+            error_emoji = "🔥" if last_error_count > 0 else ""
+
+            button_text = f"🔍 {error_emoji} {service_name[:20]}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"log_detail_{service_id}")])
+
+        keyboard.append([InlineKeyboardButton("🔙 הצג הכל", callback_data="refresh_logs_manage")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message = "🔍 *שירותים עם ניטור לוגים פעיל*\n\n"
+        message += f'סה"כ {len(monitored_services)} שירותים\n\n'
+        message += "בחר שירות לניהול:"
+
+        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
 
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -1351,6 +1732,13 @@ def main():
         print("✅ ניטור סטטוס הופעל")
     except Exception as e:
         print(f"❌ שגיאה בהפעלת ניטור סטטוס: {e}")
+
+    # הפעלת ניטור לוגים
+    try:
+        log_monitor.start_monitoring()
+        print("✅ ניטור לוגים הופעל")
+    except Exception as e:
+        print(f"❌ שגיאה בהפעלת ניטור לוגים: {e}")
 
     # שליחת התראת הפעלה
     try:
