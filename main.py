@@ -1384,6 +1384,19 @@ class RenderMonitorBot:
         service = self.db.get_service_activity(service_id)
         service_name = service.get("service_name", service_id) if service else service_id
 
+        # ודא שהשירות קיים ב-Render, כדי להבדיל בין "אין לוגים" ל"שירות לא נמצא"
+        try:
+            service_info = self.render_api.get_service_info(service_id)
+        except Exception:
+            service_info = None
+        if not service_info:
+            await msg.reply_text(
+                f"❌ השירות לא נמצא ב-Render או שה-ID שגוי\n\n"
+                f"בדוק את המזהה ונסה שוב: `{service_id}`",
+                parse_mode="Markdown",
+            )
+            return
+
         # הודעת סטטוס
         time_range = f"מה-{minutes} דקות האחרונות" if minutes else "הכי אחרונים"
         filter_text = {
@@ -1420,7 +1433,14 @@ class RenderMonitorBot:
                 logs = self.render_api.get_service_logs(service_id, tail=min(lines, 200))
             
             if not logs:
-                await msg.reply_text("📭 לא נמצאו לוגים לשירות זה")
+                await msg.reply_text(
+                    "📭 לא נמצאו לוגים לשירות זה כרגע\n\n"
+                    "אפשרויות להמשך:\n"
+                    f"• נסה להרחיב טווח: `/logs {service_id} {lines} 15`\n"
+                    f"• ודא שיש פעילות בשירות (שולח פלט)\n"
+                    f"• אם מדובר בסביבת Free ייתכן שיש פחות שימור לוגים",
+                    parse_mode="Markdown",
+                )
                 return
 
             # סינון לפי הבקשה
