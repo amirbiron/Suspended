@@ -175,6 +175,13 @@ class RenderMonitorBot:
                 return value
         return datetime.min.replace(tzinfo=timezone.utc)
 
+    def _is_preferred_service_id(self, service_id: Optional[str]) -> bool:
+        """בודק אם ה-ID נראה כמו מזהה Render אמיתי (לדוגמה srv-abcdef)."""
+        if not service_id:
+            return False
+        sid = str(service_id).strip().lower()
+        return sid.startswith("srv-") or sid.startswith("srv_")
+
     def _deduplicate_services_by_display_name(self, services: List[dict]) -> List[dict]:
         """מסנן כפילויות לפי service_name ומעדיף את הרשומה העדכנית ביותר."""
         unique: dict[str, dict] = {}
@@ -183,9 +190,16 @@ class RenderMonitorBot:
             if not key:
                 key = str(service.get("_id") or id(service))
             recency = self._service_recency_key(service)
+            preferred = self._is_preferred_service_id(service.get("_id"))
             current = unique.get(key)
-            if current is None or recency > current["recency"]:
-                unique[key] = {"service": service, "recency": recency}
+            if current is None:
+                unique[key] = {"service": service, "recency": recency, "preferred": preferred}
+                continue
+            if preferred and not current["preferred"]:
+                unique[key] = {"service": service, "recency": recency, "preferred": preferred}
+                continue
+            if preferred == current["preferred"] and recency > current["recency"]:
+                unique[key] = {"service": service, "recency": recency, "preferred": preferred}
         filtered = [entry["service"] for entry in unique.values()]
         filtered.sort(key=lambda svc: str(svc.get("service_name") or svc.get("_id") or "").lower())
         return filtered
