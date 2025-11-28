@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote, unquote
 
 import schedule
@@ -165,6 +165,38 @@ class RenderMonitorBot:
         simplified = self._simplified_status_live_or_db(service)
         return self._status_to_emoji(simplified)
 
+    def _service_recency_key(self, service: dict) -> datetime:
+        """מחשב timestamp להשוואת עדכניות בין רשומות שירות."""
+        for field in ("updated_at", "last_user_activity", "resumed_at", "suspended_at", "created_at"):
+            value = service.get(field)
+            if isinstance(value, datetime):
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
+                return value
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+    def _deduplicate_services_by_display_name(self, services: List[dict]) -> List[dict]:
+        """מסנן כפילויות לפי service_name ומעדיף את הרשומה העדכנית ביותר."""
+        unique: dict[str, dict] = {}
+        for service in services:
+            key = str(service.get("service_name") or service.get("_id") or "").strip().lower()
+            if not key:
+                key = str(service.get("_id") or id(service))
+            recency = self._service_recency_key(service)
+            current = unique.get(key)
+            if current is None or recency > current["recency"]:
+                unique[key] = {"service": service, "recency": recency}
+        filtered = [entry["service"] for entry in unique.values()]
+        filtered.sort(key=lambda svc: str(svc.get("service_name") or svc.get("_id") or "").lower())
+        return filtered
+
+    def _get_visible_services(self) -> List[dict]:
+        """מחזיר רשימת שירותים נקייה מכפילויות לתצוגה."""
+        services = self.db.get_all_services()
+        if not services:
+            return []
+        return self._deduplicate_services_by_display_name(services)
+
     async def setup_bot_commands(self, app: Application):
         """הגדרת תפריט הפקודות בטלגרם (מורץ לאחר אתחול האפליקציה)"""
         from telegram import BotCommand
@@ -241,7 +273,7 @@ class RenderMonitorBot:
         self.app.add_handler(
             CallbackQueryHandler(
                 self.service_action_callback,
-                pattern="^suspend_|^resume_|^back_to_manage$",
+                pattern="^suspend_|^resume_|^back_to_manage$|^delete_prompt_",
             )
         )
         self.app.add_handler(
@@ -396,6 +428,7 @@ class RenderMonitorBot:
             return
 
         try:
+            back_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור לניהול", callback_data="back_to_manage")]])
             if data.startswith("confirm_delete_"):
                 service_id = data.replace("confirm_delete_", "")
                 result = self.db.delete_service(service_id)
@@ -405,10 +438,12 @@ class RenderMonitorBot:
                     f"manual: {result.get('manual_actions', 0)} | status: {result.get('status_changes', 0)} | "
                     f"deploy: {result.get('deploy_events', 0)}"
                 )
-                await query.edit_message_text(summary, parse_mode="Markdown")
+                await query.edit_message_text(summary, reply_markup=back_markup, parse_mode="Markdown")
             elif data.startswith("cancel_delete_"):
                 service_id = data.replace("cancel_delete_", "")
-                await query.edit_message_text(f"❎ המחיקה בוטלה עבור `{service_id}`", parse_mode="Markdown")
+                await query.edit_message_text(
+                    f"❎ המחיקה בוטלה עבור `{service_id}`", reply_markup=back_markup, parse_mode="Markdown"
+                )
         except Exception as e:
             await query.edit_message_text(f"❌ שגיאה במחיקה: {e}")
 
@@ -608,7 +643,7 @@ class RenderMonitorBot:
         msg = update.message
         if msg is None:
             return
-        services = self.db.get_all_services()
+        services = self._get_visible_services()
 
         if not services:
             await msg.reply_text("📭 אין שירותים במערכת")
@@ -849,7 +884,7 @@ class RenderMonitorBot:
 
     async def show_manage_menu(self, query: CallbackQuery):
         """מציג את תפריט הניהול בהודעה קיימת (עריכה)"""
-        services = self.db.get_all_services()
+        services = self._get_visible_services()
 
         if not services:
             await query.edit_message_text("📭 אין שירותים במערכת")
@@ -923,6 +958,8 @@ class RenderMonitorBot:
         service_name = service.get("service_name", service_id)
         status = service.get("status", "active")
 
+        is_admin = self._is_admin_user(query.from_user)
+
         # בניית תפריט לשירות
         keyboard = []
 
@@ -930,6 +967,11 @@ class RenderMonitorBot:
             keyboard.append([InlineKeyboardButton("▶️ הפעל מחדש", callback_data=f"resume_{service_id}")])
         else:
             keyboard.append([InlineKeyboardButton("⏸️ השעה", callback_data=f"suspend_{service_id}")])
+
+        if is_admin:
+            keyboard.append(
+                [InlineKeyboardButton("🗑️ הסר מהרשימה", callback_data=f"delete_prompt_{service_id}")]
+            )
 
         keyboard.append([InlineKeyboardButton("🔙 חזור", callback_data="back_to_manage")])
 
@@ -984,6 +1026,26 @@ class RenderMonitorBot:
                     pass
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
+        elif data.startswith("delete_prompt_"):
+            if not self._is_admin_user(query.from_user):
+                await query.answer("אין הרשאה", show_alert=True)
+                return
+            service_id = data.replace("delete_prompt_", "")
+            service = self.db.get_service_activity(service_id) or {}
+            service_name = service.get("service_name", service_id)
+            warning = "🗑️ *הסרת שירות מהרשימה*\n\n"
+            warning += f"שירות: *{service_name}*\n"
+            warning += f"🆔 `{service_id}`\n\n"
+            warning += "הפעולה תמחק את השירות מהמסד בלבד (לא מ-Render) ותסיר אותו מתפריט הניהול.\n"
+            warning += "האם להמשיך?"
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ כן, מחק", callback_data=f"confirm_delete_{service_id}"),
+                    InlineKeyboardButton("🔙 חזור", callback_data="back_to_manage"),
+                ]
+            ]
+            await query.edit_message_text(warning, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         elif data == "back_to_manage":  # מטפל בכפתור "חזור"
             # מציג מחדש את תפריט הניהול בעזרת עריכת ההודעה
             await self.show_manage_menu(query)
