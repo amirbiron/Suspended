@@ -856,7 +856,7 @@ class RenderMonitorBot:
         msg = update.message
         if msg is None:
             return
-        services = self.db.get_all_services()
+        services = self._get_visible_services()
 
         if not services:
             await msg.reply_text("📭 אין שירותים במערכת")
@@ -1200,7 +1200,7 @@ class RenderMonitorBot:
     async def refresh_monitor_manage(self, query: CallbackQuery):
         """רענון רשימת הניטור"""
         # קבלת רשימת השירותים
-        services = self.db.get_all_services()
+        services = self._get_visible_services()
 
         if not services:
             await query.edit_message_text("📭 אין שירותים במערכת")
