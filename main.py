@@ -287,7 +287,7 @@ class RenderMonitorBot:
         self.app.add_handler(
             CallbackQueryHandler(
                 self.service_action_callback,
-                pattern="^suspend_|^resume_|^back_to_manage$|^delete_prompt_",
+                pattern="^suspend_|^resume_|^back_to_manage$",
             )
         )
         self.app.add_handler(
@@ -972,8 +972,6 @@ class RenderMonitorBot:
         service_name = service.get("service_name", service_id)
         status = service.get("status", "active")
 
-        is_admin = self._is_admin_user(query.from_user)
-
         # בניית תפריט לשירות
         keyboard = []
 
@@ -981,11 +979,6 @@ class RenderMonitorBot:
             keyboard.append([InlineKeyboardButton("▶️ הפעל מחדש", callback_data=f"resume_{service_id}")])
         else:
             keyboard.append([InlineKeyboardButton("⏸️ השעה", callback_data=f"suspend_{service_id}")])
-
-        if is_admin:
-            keyboard.append(
-                [InlineKeyboardButton("🗑️ הסר מהרשימה", callback_data=f"delete_prompt_{service_id}")]
-            )
 
         keyboard.append([InlineKeyboardButton("🔙 חזור", callback_data="back_to_manage")])
 
@@ -1040,26 +1033,6 @@ class RenderMonitorBot:
                     pass
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
-        elif data.startswith("delete_prompt_"):
-            if not self._is_admin_user(query.from_user):
-                await query.answer("אין הרשאה", show_alert=True)
-                return
-            service_id = data.replace("delete_prompt_", "")
-            service = self.db.get_service_activity(service_id) or {}
-            service_name = service.get("service_name", service_id)
-            warning = "🗑️ *הסרת שירות מהרשימה*\n\n"
-            warning += f"שירות: *{service_name}*\n"
-            warning += f"🆔 `{service_id}`\n\n"
-            warning += "הפעולה תמחק את השירות מהמסד בלבד (לא מ-Render) ותסיר אותו מתפריט הניהול.\n"
-            warning += "האם להמשיך?"
-
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ כן, מחק", callback_data=f"confirm_delete_{service_id}"),
-                    InlineKeyboardButton("🔙 חזור", callback_data="back_to_manage"),
-                ]
-            ]
-            await query.edit_message_text(warning, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         elif data == "back_to_manage":  # מטפל בכפתור "חזור"
             # מציג מחדש את תפריט הניהול בעזרת עריכת ההודעה
             await self.show_manage_menu(query)
