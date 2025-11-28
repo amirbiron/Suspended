@@ -503,29 +503,103 @@ class RenderAPI:
 			params["endTime"] = end_time
 
 		def _parse_logs_payload(payload: Any) -> List[Dict[str, Any]]:
-			# תמיכה במבני JSON שונים
+			def _looks_like_entry(node: Any) -> bool:
+				if not isinstance(node, dict):
+					return False
+				text_candidate = None
+				for key in ("text", "message", "log", "body", "line"):
+					if node.get(key) is not None:
+						text_candidate = node.get(key)
+						break
+				if text_candidate is None:
+					return False
+				for marker in ("timestamp", "time", "ts", "id", "logId", "stream", "type", "level", "severity"):
+					if marker in node:
+						return True
+				return False
+
+			def _collect_entries(node: Any) -> List[Dict[str, Any]]:
+				if isinstance(node, list):
+					collected: List[Dict[str, Any]] = []
+					for item in node:
+						collected.extend(_collect_entries(item))
+					return collected
+				if isinstance(node, dict):
+					if _looks_like_entry(node):
+						return [node]
+					collected: List[Dict[str, Any]] = []
+					for value in node.values():
+						collected.extend(_collect_entries(value))
+					return collected
+				return []
+
 			if isinstance(payload, list):
-				return cast(List[Dict[str, Any]], payload)
+				return _collect_entries(payload)
 			if isinstance(payload, dict):
-				# קודם חפש מפתחות עליונים מוכרים
-				for key in ("logs", "entries", "data", "items", "result"):
+				for key in ("logs", "entries", "data", "items", "result", "records", "logEntries", "log_entries"):
 					val = payload.get(key)
 					if isinstance(val, list):
-						return cast(List[Dict[str, Any]], val)
-				# אם לא נמצא, נסה עטיפות נפוצות פעם אחת
+						extracted = _collect_entries(val)
+						if extracted:
+							return extracted
+				for key in ("logGroups", "log_groups", "groups"):
+					groups = payload.get(key)
+					if isinstance(groups, list):
+						collected: List[Dict[str, Any]] = []
+						for group in groups:
+							collected.extend(_collect_entries(group))
+						if collected:
+							return collected
 				inner = payload.get("log") or payload.get("response")
 				if isinstance(inner, dict):
-					for k in ("logs", "entries", "data", "items"):
-						vv = inner.get(k)
-						if isinstance(vv, list):
-							return cast(List[Dict[str, Any]], vv)
-			return []
+					result = _collect_entries(inner)
+					if result:
+						return result
+			return _collect_entries(payload)
+
+		def _normalize_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+			normalized: List[Dict[str, Any]] = []
+			for entry in entries:
+				if not isinstance(entry, dict):
+					continue
+				text = entry.get("text") or entry.get("message") or entry.get("log") or entry.get("body")
+				if text is None:
+					continue
+				if not isinstance(text, str):
+					text = str(text)
+				stream = entry.get("stream") or entry.get("type") or entry.get("channel")
+				if isinstance(stream, str):
+					lower = stream.lower()
+					if "err" in lower:
+						stream = "stderr"
+					elif "out" in lower:
+						stream = "stdout"
+				if not stream:
+					level = entry.get("level") or entry.get("severity")
+					if isinstance(level, str) and "err" in level.lower():
+						stream = "stderr"
+				if not stream:
+					stream = "stdout"
+				timestamp = entry.get("timestamp") or entry.get("time") or entry.get("ts")
+				if timestamp is not None and not isinstance(timestamp, str):
+					timestamp = str(timestamp)
+				log_id = entry.get("id") or entry.get("logId") or entry.get("_id") or entry.get("uuid")
+				normalized.append(
+					{
+						"id": log_id,
+						"timestamp": timestamp,
+						"text": text,
+						"stream": stream,
+						"raw": entry,
+					}
+				)
+			return normalized
 
 		import logging
 		try:
 			resp = requests.get(url, headers=self.headers, params=params, timeout=30)
 			if resp.status_code == 200:
-				return _parse_logs_payload(resp.json())
+				return _normalize_entries(_parse_logs_payload(resp.json()))
 			# נסה וריאציות פרמטרים חלופיות (חלק ממסמכי API ישנים/חדשים)
 			alt_params = dict(params)
 			# חלק מה-APIs משתמשים ב-limit במקום tail — שמור את הערך המקורי (כולל 0)
@@ -539,14 +613,14 @@ class RenderAPI:
 				alt_params["end"] = alt_params.pop("endTime")
 			resp2 = requests.get(url, headers=self.headers, params=alt_params, timeout=30)
 			if resp2.status_code == 200:
-				return _parse_logs_payload(resp2.json())
+				return _normalize_entries(_parse_logs_payload(resp2.json()))
 			# ניסיון אחרון: ללא פרמטרי זמן כלל
 			# אם המשתמש סיפק tail מפורש (כולל 0), נשמר את אותו ערך; אם לא — נשתמש בברירת מחדל גדולה
 			fallback_tail = min(max((tail if tail is not None else 500), 0), 10000)
 			fallback_params = {"tail": fallback_tail}
 			resp3 = requests.get(url, headers=self.headers, params=fallback_params, timeout=30)
 			if resp3.status_code == 200:
-				return _parse_logs_payload(resp3.json())
+				return _normalize_entries(_parse_logs_payload(resp3.json()))
 			logging.warning(
 				f"Failed to fetch logs for {service_id}. codes: {resp.status_code}, {resp2.status_code}, {resp3.status_code}"
 			)

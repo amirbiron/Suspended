@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote, unquote
 
 import schedule
@@ -164,6 +164,52 @@ class RenderMonitorBot:
         """נוחות: סטטוס חי->מפושט->אימוג'י עבור שירות."""
         simplified = self._simplified_status_live_or_db(service)
         return self._status_to_emoji(simplified)
+
+    def _service_recency_key(self, service: dict) -> datetime:
+        """מחשב timestamp להשוואת עדכניות בין רשומות שירות."""
+        for field in ("updated_at", "last_user_activity", "resumed_at", "suspended_at", "created_at"):
+            value = service.get(field)
+            if isinstance(value, datetime):
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
+                return value
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+    def _is_preferred_service_id(self, service_id: Optional[str]) -> bool:
+        """בודק אם ה-ID נראה כמו מזהה Render אמיתי (לדוגמה srv-abcdef)."""
+        if not service_id:
+            return False
+        sid = str(service_id).strip().lower()
+        return sid.startswith("srv-") or sid.startswith("srv_")
+
+    def _deduplicate_services_by_display_name(self, services: List[dict]) -> List[dict]:
+        """מסנן כפילויות לפי service_name ומעדיף את הרשומה העדכנית ביותר."""
+        unique: dict[str, dict] = {}
+        for service in services:
+            key = str(service.get("service_name") or service.get("_id") or "").strip().lower()
+            if not key:
+                key = str(service.get("_id") or id(service))
+            recency = self._service_recency_key(service)
+            preferred = self._is_preferred_service_id(service.get("_id"))
+            current = unique.get(key)
+            if current is None:
+                unique[key] = {"service": service, "recency": recency, "preferred": preferred}
+                continue
+            if preferred and not current["preferred"]:
+                unique[key] = {"service": service, "recency": recency, "preferred": preferred}
+                continue
+            if preferred == current["preferred"] and recency > current["recency"]:
+                unique[key] = {"service": service, "recency": recency, "preferred": preferred}
+        filtered = [entry["service"] for entry in unique.values()]
+        filtered.sort(key=lambda svc: str(svc.get("service_name") or svc.get("_id") or "").lower())
+        return filtered
+
+    def _get_visible_services(self) -> List[dict]:
+        """מחזיר רשימת שירותים נקייה מכפילויות לתצוגה."""
+        services = self.db.get_all_services()
+        if not services:
+            return []
+        return self._deduplicate_services_by_display_name(services)
 
     async def setup_bot_commands(self, app: Application):
         """הגדרת תפריט הפקודות בטלגרם (מורץ לאחר אתחול האפליקציה)"""
@@ -396,6 +442,7 @@ class RenderMonitorBot:
             return
 
         try:
+            back_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור לניהול", callback_data="back_to_manage")]])
             if data.startswith("confirm_delete_"):
                 service_id = data.replace("confirm_delete_", "")
                 result = self.db.delete_service(service_id)
@@ -405,10 +452,12 @@ class RenderMonitorBot:
                     f"manual: {result.get('manual_actions', 0)} | status: {result.get('status_changes', 0)} | "
                     f"deploy: {result.get('deploy_events', 0)}"
                 )
-                await query.edit_message_text(summary, parse_mode="Markdown")
+                await query.edit_message_text(summary, reply_markup=back_markup, parse_mode="Markdown")
             elif data.startswith("cancel_delete_"):
                 service_id = data.replace("cancel_delete_", "")
-                await query.edit_message_text(f"❎ המחיקה בוטלה עבור `{service_id}`", parse_mode="Markdown")
+                await query.edit_message_text(
+                    f"❎ המחיקה בוטלה עבור `{service_id}`", reply_markup=back_markup, parse_mode="Markdown"
+                )
         except Exception as e:
             await query.edit_message_text(f"❌ שגיאה במחיקה: {e}")
 
@@ -608,7 +657,7 @@ class RenderMonitorBot:
         msg = update.message
         if msg is None:
             return
-        services = self.db.get_all_services()
+        services = self._get_visible_services()
 
         if not services:
             await msg.reply_text("📭 אין שירותים במערכת")
@@ -807,7 +856,7 @@ class RenderMonitorBot:
         msg = update.message
         if msg is None:
             return
-        services = self.db.get_all_services()
+        services = self._get_visible_services()
 
         if not services:
             await msg.reply_text("📭 אין שירותים במערכת")
@@ -849,7 +898,7 @@ class RenderMonitorBot:
 
     async def show_manage_menu(self, query: CallbackQuery):
         """מציג את תפריט הניהול בהודעה קיימת (עריכה)"""
-        services = self.db.get_all_services()
+        services = self._get_visible_services()
 
         if not services:
             await query.edit_message_text("📭 אין שירותים במערכת")
@@ -1151,7 +1200,7 @@ class RenderMonitorBot:
     async def refresh_monitor_manage(self, query: CallbackQuery):
         """רענון רשימת הניטור"""
         # קבלת רשימת השירותים
-        services = self.db.get_all_services()
+        services = self._get_visible_services()
 
         if not services:
             await query.edit_message_text("📭 אין שירותים במערכת")

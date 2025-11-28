@@ -109,6 +109,10 @@ python main.py
 - `/list_suspended` - רשימת שירותים מושעים
 - `/help` - עזרה ורשימת פקודות
 
+### ניהול שירותים ברשימת `/manage`
+- רשימת הניהול מציגה כל שירות פעם אחת בלבד לפי שם התצוגה העדכני שלו, גם אם בעבר השתמשת ב-`BOT_LABLE`/`service_name` אחר.
+- להסרת שירות ישן (למשל בוט שנמחק) הפעל ידנית את פקודת האדמין `/delete_service <service_id>` (הפקודה מוסתרת בתפריט) כדי למחוק אותו מהמסד ולהעלים אותו מהרשימה.
+
 ### פקודות ניטור לוגים 🆕
 - `/logs [service_id] [lines] [minutes] [filter]` - צפייה בלוגים
 - `/errors [service_id] [lines] [minutes]` - צפייה רק בשגיאות 🔥
