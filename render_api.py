@@ -10,7 +10,7 @@ class RenderAPI:
 	def __init__(self):
 		self.api_key = config.RENDER_API_KEY
 		self.base_url = config.RENDER_API_URL
-		self.headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+		self.headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json", "Accept": "application/json"}
 
 	def suspend_service(self, service_id: str) -> Dict:
 		"""השעיית שירות"""
@@ -600,9 +600,11 @@ class RenderAPI:
 			# First attempt with standard parameters
 			resp = requests.get(url, headers=self.headers, params=params, timeout=30)
 			if resp.status_code == 200:
-				return _normalize_entries(_parse_logs_payload(resp.json()))
+				logs = _normalize_entries(_parse_logs_payload(resp.json()))
+				if logs:
+					return logs
 			
-			# Fallback to legacy parameters
+			# Fallback to legacy parameters if first attempt failed or returned no logs
 			legacy_params = {}
 			if tail is not None:
 				legacy_params["tail"] = min(max(tail, 0), 10000)
@@ -616,7 +618,7 @@ class RenderAPI:
 				return _normalize_entries(_parse_logs_payload(resp2.json()))
 				
 			logging.warning(
-				f"Failed to fetch logs for {service_id}. codes: {resp.status_code}, {resp2.status_code}"
+				f"Failed to fetch logs for {service_id}. codes: {resp.status_code}, {resp2.status_code if 'resp2' in locals() else 'N/A'}"
 			)
 			return []
 		except requests.RequestException as e:
@@ -638,7 +640,7 @@ class RenderAPI:
 		try:
 			# Use explicit start time
 			start_dt = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-			start_str = start_dt.isoformat().replace("+00:00", "Z")
+			start_str = start_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 			
 			# Use generous limit
 			logs = self.get_service_logs(service_id, tail=500, start_time=start_str)
