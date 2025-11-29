@@ -493,14 +493,14 @@ class RenderAPI:
 		"""
 		url = f"{self.base_url}/services/{service_id}/logs"
 		
+		# Render API uses 'limit', 'start', 'end'
 		params = {}
-		# שימור כוונת המשתמש: אם tail==0, שלח 0; אם None, אל תשלח מפתח בכלל
 		if tail is not None:
-			params["tail"] = min(max(tail, 0), 10000)  # Render מגביל ל-10000
+			params["limit"] = min(max(tail, 0), 500) 
 		if start_time:
-			params["startTime"] = start_time
+			params["start"] = start_time
 		if end_time:
-			params["endTime"] = end_time
+			params["end"] = end_time
 
 		def _parse_logs_payload(payload: Any) -> List[Dict[str, Any]]:
 			def _looks_like_entry(node: Any) -> bool:
@@ -597,32 +597,26 @@ class RenderAPI:
 
 		import logging
 		try:
+			# First attempt with standard parameters
 			resp = requests.get(url, headers=self.headers, params=params, timeout=30)
 			if resp.status_code == 200:
 				return _normalize_entries(_parse_logs_payload(resp.json()))
-			# נסה וריאציות פרמטרים חלופיות (חלק ממסמכי API ישנים/חדשים)
-			alt_params = dict(params)
-			# חלק מה-APIs משתמשים ב-limit במקום tail — שמור את הערך המקורי (כולל 0)
-			if "tail" in alt_params:
-				val = alt_params.pop("tail")
-				alt_params["limit"] = val if isinstance(val, int) else min(max(tail or 0, 0), 10000)
-			# חלק מה-APIs משתמשים ב-start/end במקום startTime/endTime
-			if "startTime" in alt_params:
-				alt_params["start"] = alt_params.pop("startTime")
-			if "endTime" in alt_params:
-				alt_params["end"] = alt_params.pop("endTime")
-			resp2 = requests.get(url, headers=self.headers, params=alt_params, timeout=30)
+			
+			# Fallback to legacy parameters
+			legacy_params = {}
+			if tail is not None:
+				legacy_params["tail"] = min(max(tail, 0), 10000)
+			if start_time:
+				legacy_params["startTime"] = start_time
+			if end_time:
+				legacy_params["endTime"] = end_time
+				
+			resp2 = requests.get(url, headers=self.headers, params=legacy_params, timeout=30)
 			if resp2.status_code == 200:
 				return _normalize_entries(_parse_logs_payload(resp2.json()))
-			# ניסיון אחרון: ללא פרמטרי זמן כלל
-			# אם המשתמש סיפק tail מפורש (כולל 0), נשמר את אותו ערך; אם לא — נשתמש בברירת מחדל גדולה
-			fallback_tail = min(max((tail if tail is not None else 500), 0), 10000)
-			fallback_params = {"tail": fallback_tail}
-			resp3 = requests.get(url, headers=self.headers, params=fallback_params, timeout=30)
-			if resp3.status_code == 200:
-				return _normalize_entries(_parse_logs_payload(resp3.json()))
+				
 			logging.warning(
-				f"Failed to fetch logs for {service_id}. codes: {resp.status_code}, {resp2.status_code}, {resp3.status_code}"
+				f"Failed to fetch logs for {service_id}. codes: {resp.status_code}, {resp2.status_code}"
 			)
 			return []
 		except requests.RequestException as e:
@@ -641,11 +635,21 @@ class RenderAPI:
 		"""
 		from datetime import datetime, timezone, timedelta
 		
-		# שלוף את האחרונים (ללא פרמטרי זמן) וסנן לוגית לפי timestamp
-		logs = self.get_service_logs(service_id, tail=1000)
-		if not logs:
-			return []
 		try:
+			# Use explicit start time
+			start_dt = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+			start_str = start_dt.isoformat().replace("+00:00", "Z")
+			
+			# Use generous limit
+			logs = self.get_service_logs(service_id, tail=500, start_time=start_str)
+			
+			if not logs:
+				logs = self.get_service_logs(service_id, tail=500)
+			
+			if not logs:
+				return []
+
+			# Filter again to ensure time range
 			end_time = datetime.now(timezone.utc)
 			start_time = end_time - timedelta(minutes=minutes)
 			filtered: List[Dict[str, Any]] = []
@@ -657,7 +661,6 @@ class RenderAPI:
 					iso = ts_raw.replace("Z", "+00:00") if isinstance(ts_raw, str) else ts_raw
 					ts = datetime.fromisoformat(iso)
 				except Exception:
-					# אם אין timestamp קריא, נשאיר את הלוג
 					filtered.append(entry)
 					continue
 				if start_time <= ts <= end_time:
@@ -665,9 +668,7 @@ class RenderAPI:
 			records = filtered if filtered else logs
 			return records
 		except Exception:
-			# במקרה של בעיה בפרסינג, נחזיר את כל הלוגים
-			return logs
-
+			return []
 
 # יצירת instance גלובלי
 render_api = RenderAPI()
