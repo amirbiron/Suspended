@@ -484,7 +484,7 @@ class RenderAPI:
 		
 		Args:
 			service_id: מזהה השירות
-			tail: מספר שורות לוג להחזיר (ברירת מחדל: 100, מקסימום: 10000)
+			tail: מספר שורות לוג להחזיר (ברירת מחדל: 100, מקסימום: 100 לפי מגבלות Render API)
 			start_time: זמן התחלה (ISO 8601 format)
 			end_time: זמן סיום (ISO 8601 format)
 		
@@ -494,9 +494,10 @@ class RenderAPI:
 		url = f"{self.base_url}/services/{service_id}/logs"
 		
 		# Render API uses 'limit', 'start', 'end'
+		# Render API allows max 100 lines per request
 		params = {}
 		if tail is not None:
-			params["limit"] = min(max(tail, 0), 500) 
+			params["limit"] = min(max(tail, 0), 100) 
 		if start_time:
 			params["start"] = start_time
 		if end_time:
@@ -607,7 +608,7 @@ class RenderAPI:
 			# Fallback to legacy parameters if first attempt failed or returned no logs
 			legacy_params = {}
 			if tail is not None:
-				legacy_params["tail"] = min(max(tail, 0), 10000)
+				legacy_params["tail"] = min(max(tail, 0), 100)  # Max 100 per Render API
 			if start_time:
 				legacy_params["startTime"] = start_time
 			if end_time:
@@ -626,7 +627,7 @@ class RenderAPI:
 			return []
 
 	def get_recent_logs(self, service_id: str, minutes: int = 5) -> List[Dict[str, Any]]:
-		"""קבלת לוגים מהדקות האחרונות
+		"""קבלת לוגים מהדקות האחרונות (מתוקן עם טיפול ב-Timezone)
 		
 		Args:
 			service_id: מזהה השירות
@@ -636,17 +637,19 @@ class RenderAPI:
 			רשימת לוגים
 		"""
 		from datetime import datetime, timezone, timedelta
+		import logging
 		
 		try:
-			# Use explicit start time
+			# Use explicit start time with clean ISO format (no microseconds)
 			start_dt = datetime.now(timezone.utc) - timedelta(minutes=minutes)
 			start_str = start_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 			
-			# Use generous limit
-			logs = self.get_service_logs(service_id, tail=500, start_time=start_str)
+			# Request max 100 logs (Render API limit)
+			logs = self.get_service_logs(service_id, tail=100, start_time=start_str)
 			
 			if not logs:
-				logs = self.get_service_logs(service_id, tail=500)
+				# Fallback: try without start_time filter
+				logs = self.get_service_logs(service_id, tail=100)
 			
 			if not logs:
 				return []
@@ -657,19 +660,29 @@ class RenderAPI:
 			filtered: List[Dict[str, Any]] = []
 			for entry in logs:
 				ts_raw = entry.get("timestamp")
-				if not isinstance(ts_raw, str):
+				if not ts_raw:
 					continue
 				try:
-					iso = ts_raw.replace("Z", "+00:00") if isinstance(ts_raw, str) else ts_raw
+					iso = str(ts_raw).replace("Z", "+00:00")
 					ts = datetime.fromisoformat(iso)
+					
+					# === CRITICAL FIX: Ensure timezone-aware datetime ===
+					# If the parsed timestamp is naive (no timezone), assume UTC
+					if ts.tzinfo is None:
+						ts = ts.replace(tzinfo=timezone.utc)
+					
+					if start_time <= ts <= end_time:
+						filtered.append(entry)
 				except Exception:
+					# On parse error, keep the log entry to avoid data loss
 					filtered.append(entry)
 					continue
-				if start_time <= ts <= end_time:
-					filtered.append(entry)
 			records = filtered if filtered else logs
 			return records
-		except Exception:
+		except Exception as e:
+			# Log the actual error instead of silently returning empty list
+			import logging
+			logging.error(f"DEBUG: Critical error in get_recent_logs for {service_id}: {e}")
 			return []
 
 # יצירת instance גלובלי
