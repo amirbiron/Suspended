@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Iterable, Optional
 
 from pymongo import MongoClient
 
@@ -91,6 +91,104 @@ class Database:
     def get_all_services(self):
         """קבלת כל השירותים"""
         return list(self.services.find())
+
+    def ensure_service_exists(
+        self,
+        service_id: str,
+        *,
+        owner_id: Optional[str] = None,
+        service_name: Optional[str] = None,
+    ):
+        """ודא שקיים מסמך שירות בסיסי במסד (לצורך תאימות לאחור עם SERVICES_TO_MONITOR).
+
+        חשוב: משתמשים ב-$setOnInsert בלבד כדי לא "לגעת" בשירותים קיימים.
+        בנוסף, נגדיר last_user_activity בעת יצירה כדי למנוע התראות "לא ידוע" מיד לאחר רישום.
+        """
+        now = datetime.now(timezone.utc)
+        base_doc = {
+            "created_at": now,
+            "updated_at": now,
+            "service_name": service_name or service_id,
+            "status": "active",
+            "last_user_activity": now,
+            "inactive_days": 0,
+            "total_users": 0,
+            "suspend_count": 0,
+            "notification_settings": {
+                "alert_after_days": config.INACTIVE_DAYS_ALERT,
+                "auto_suspend_after_days": config.AUTO_SUSPEND_DAYS,
+                "last_alert_sent": None,
+            },
+            "registered_at": now,
+        }
+        if owner_id:
+            base_doc["owner_id"] = str(owner_id)
+            base_doc["registered_by"] = str(owner_id)
+
+        return self.services.update_one({"_id": service_id}, {"$setOnInsert": base_doc}, upsert=True)
+
+    def register_service(
+        self,
+        service_id: str,
+        owner_id: str,
+        service_name: str,
+        *,
+        force_owner_update: bool = False,
+    ):
+        """רישום שירות חדש (או עדכון שם) עם owner.
+
+        שומר ב-`service_activity` עם `_id`=service_id ומוסיף owner_id.
+        """
+        now = datetime.now(timezone.utc)
+        owner_str = str(owner_id)
+
+        update_set: dict = {
+            "updated_at": now,
+            "service_name": service_name,
+        }
+
+        # כברירת מחדל: לא דורסים בעלות קיימת.
+        # אם רוצים להעביר בעלות (אדמין/תהליך ייעודי) אפשר להפעיל force_owner_update.
+        if force_owner_update:
+            update_set["owner_id"] = owner_str
+
+        set_on_insert: dict = {
+            "created_at": now,
+            "status": "active",
+            "last_user_activity": now,
+            "inactive_days": 0,
+            "total_users": 0,
+            "suspend_count": 0,
+            "owner_id": owner_str,
+            "registered_at": now,
+            "registered_by": owner_str,
+            "notification_settings": {
+                "alert_after_days": config.INACTIVE_DAYS_ALERT,
+                "auto_suspend_after_days": config.AUTO_SUSPEND_DAYS,
+                "last_alert_sent": None,
+            },
+        }
+
+        # MongoDB לא מאפשר את אותו שדה גם ב-$set וגם ב-$setOnInsert בזמן upsert שגורם ל-insert.
+        # אם force_owner_update פעיל, owner_id יגיע דרך $set (שמיושם גם ב-insert), ולכן נסיר אותו מ-$setOnInsert.
+        if force_owner_update:
+            set_on_insert.pop("owner_id", None)
+
+        return self.services.update_one({"_id": service_id}, {"$set": update_set, "$setOnInsert": set_on_insert}, upsert=True)
+
+    def ensure_services_exist(self, service_ids: Iterable[str], *, owner_id: Optional[str] = None):
+        """ודא שמספר שירותים קיימים במסד (ללא עדכון מסמכים קיימים)."""
+        count = 0
+        for sid in service_ids:
+            if not sid:
+                continue
+            try:
+                self.ensure_service_exists(str(sid), owner_id=owner_id, service_name=str(sid))
+                count += 1
+            except Exception:
+                # נשתיק כדי לא להפיל את האפליקציה בזמן אתחול
+                continue
+        return count
 
     def update_alert_sent(self, service_id):
         """עדכון שהתראה נשלחה"""
