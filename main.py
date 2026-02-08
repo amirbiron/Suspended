@@ -455,6 +455,7 @@ class RenderMonitorBot:
             return
 
         force_owner_update = False
+        claim_owner_if_unowned = False
         if existing is not None:
             existing_owner = existing.get("owner_id")
             if existing_owner:
@@ -469,18 +470,31 @@ class RenderMonitorBot:
                     force_owner_update = True
             else:
                 # שירות קיים אך ללא owner_id - נאפשר למשתמש לתפוס בעלות
-                force_owner_update = True
+                claim_owner_if_unowned = True
 
         try:
-            self.db.register_service(
+            result = self.db.register_service(
                 service_id,
                 owner_id=owner_id,
                 service_name=final_name,
                 force_owner_update=force_owner_update,
+                claim_owner_if_unowned=claim_owner_if_unowned,
             )
         except Exception as e:
             await msg.reply_text(f"❌ כשל ברישום השירות במסד הנתונים: {e}")
             return
+
+        # אם ניסינו "לתפוס" בעלות והשירות נתפס במקביל ע"י משתמש אחר, העדכון לא יתאים לפילטר
+        try:
+            if claim_owner_if_unowned and getattr(result, "matched_count", 0) == 0 and getattr(result, "upserted_id", None) is None:
+                await msg.reply_text(
+                    "❌ לא הצלחתי לתפוס בעלות על השירות כי הוא נרשם בדיוק עכשיו על ידי משתמש אחר.\n"
+                    "נסה שוב או פנה לאדמין אם צריך להעביר בעלות."
+                )
+                return
+        except Exception:
+            # אם אין לנו metadata מספקת על התוצאה, נמשיך עם הודעת הצלחה
+            pass
 
         safe_name = str(final_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
         await msg.reply_text(

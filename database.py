@@ -134,6 +134,7 @@ class Database:
         service_name: str,
         *,
         force_owner_update: bool = False,
+        claim_owner_if_unowned: bool = False,
     ):
         """רישום שירות חדש (או עדכון שם) עם owner.
 
@@ -142,6 +143,9 @@ class Database:
         now = datetime.now(timezone.utc)
         owner_str = str(owner_id)
 
+        if force_owner_update and claim_owner_if_unowned:
+            raise ValueError("force_owner_update and claim_owner_if_unowned are mutually exclusive")
+
         update_set: dict = {
             "updated_at": now,
             "service_name": service_name,
@@ -149,7 +153,7 @@ class Database:
 
         # כברירת מחדל: לא דורסים בעלות קיימת.
         # אם רוצים להעביר בעלות (אדמין/תהליך ייעודי) אפשר להפעיל force_owner_update.
-        if force_owner_update:
+        if force_owner_update or claim_owner_if_unowned:
             update_set["owner_id"] = owner_str
 
         set_on_insert: dict = {
@@ -171,10 +175,22 @@ class Database:
 
         # MongoDB לא מאפשר את אותו שדה גם ב-$set וגם ב-$setOnInsert בזמן upsert שגורם ל-insert.
         # אם force_owner_update פעיל, owner_id יגיע דרך $set (שמיושם גם ב-insert), ולכן נסיר אותו מ-$setOnInsert.
-        if force_owner_update:
+        if force_owner_update or claim_owner_if_unowned:
             set_on_insert.pop("owner_id", None)
 
-        return self.services.update_one({"_id": service_id}, {"$set": update_set, "$setOnInsert": set_on_insert}, upsert=True)
+        # Atomic guard for "claim unowned": only set owner if still unowned (prevents last-writer-wins race)
+        filter_doc: dict = {"_id": service_id}
+        if claim_owner_if_unowned:
+            filter_doc = {
+                "_id": service_id,
+                "$or": [
+                    {"owner_id": {"$exists": False}},
+                    {"owner_id": None},
+                    {"owner_id": ""},
+                ],
+            }
+
+        return self.services.update_one(filter_doc, {"$set": update_set, "$setOnInsert": set_on_insert}, upsert=True)
 
     def ensure_services_exist(self, service_ids: Iterable[str], *, owner_id: Optional[str] = None):
         """ודא שמספר שירותים קיימים במסד (ללא עדכון מסמכים קיימים)."""
