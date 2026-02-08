@@ -80,17 +80,18 @@ class Database:
                 {
                     "$or": [{"last_user_activity": {"$lt": cutoff_date}}, {"last_user_activity": {"$exists": False}}],
                     "status": {"$ne": "suspended"},
+                    "removed": {"$ne": True},
                 }
             )
         )
 
     def get_suspended_services(self):
         """קבלת שירותים מושעים"""
-        return list(self.services.find({"status": "suspended"}))
+        return list(self.services.find({"status": "suspended", "removed": {"$ne": True}}))
 
     def get_all_services(self):
         """קבלת כל השירותים"""
-        return list(self.services.find())
+        return list(self.services.find({"removed": {"$ne": True}}))
 
     def ensure_service_exists(
         self,
@@ -110,6 +111,7 @@ class Database:
             "updated_at": now,
             "service_name": service_name or service_id,
             "status": "active",
+            "removed": False,
             "last_user_activity": now,
             "inactive_days": 0,
             "total_users": 0,
@@ -149,6 +151,10 @@ class Database:
         update_set: dict = {
             "updated_at": now,
             "service_name": service_name,
+            # אם השירות הוסר בעבר — רישום מחדש מחזיר אותו לרשימה
+            "removed": False,
+            "removed_at": None,
+            "removed_by": None,
         }
 
         # כברירת מחדל: לא דורסים בעלות קיימת.
@@ -195,6 +201,31 @@ class Database:
         upsert_flag = False if claim_owner_if_unowned else True
 
         return self.services.update_one(filter_doc, {"$set": update_set, "$setOnInsert": set_on_insert}, upsert=upsert_flag)
+
+    def remove_service_from_management(self, service_id: str, user_id: str) -> bool:
+        """מסמן שירות כהוסר מהמערכת (ללא מחיקה מ-Render).
+
+        בפועל: מסתיר אותו מהרשימות (removed=true) ומכבה ניטורים/התראות הקשורים אליו.
+        אינו מוחק היסטוריה מקולקציות אחרות.
+        """
+        now = datetime.now(timezone.utc)
+        result = self.services.update_one(
+            {"_id": service_id},
+            {
+                "$set": {
+                    "removed": True,
+                    "removed_at": now,
+                    "removed_by": str(user_id),
+                    "updated_at": now,
+                    # כיבוי ניטורים/התראות
+                    "status_monitoring.enabled": False,
+                    "log_monitoring.enabled": False,
+                    "deploy_notifications_enabled": False,
+                }
+            },
+            upsert=False,
+        )
+        return bool(result.matched_count)
 
     def ensure_services_exist(self, service_ids: Iterable[str], *, owner_id: Optional[str] = None):
         """ודא שמספר שירותים קיימים במסד (ללא עדכון מסמכים קיימים)."""
@@ -261,7 +292,7 @@ class Database:
 
     def get_status_monitored_services(self):
         """קבלת רשימת שירותים עם ניטור סטטוס פעיל"""
-        return list(self.services.find({"status_monitoring.enabled": True}))
+        return list(self.services.find({"status_monitoring.enabled": True, "removed": {"$ne": True}}))
 
     def update_service_status(self, service_id: str, status: str):
         """עדכון הסטטוס הנוכחי של שירות"""
@@ -283,7 +314,7 @@ class Database:
         """קבלת רשימת שירותים עם פרטי הניטור שלהם"""
         return list(
             self.services.find(
-                {"status_monitoring.enabled": True},
+                {"status_monitoring.enabled": True, "removed": {"$ne": True}},
                 {"_id": 1, "service_name": 1, "last_known_status": 1, "status_monitoring": 1},
             )
         )
@@ -292,7 +323,7 @@ class Database:
         """החזרת שירותים שעבורם התראות דיפלוי מופעלות (גם אם ניטור סטטוס כבוי)"""
         return list(
             self.services.find(
-                {"deploy_notifications_enabled": True},
+                {"deploy_notifications_enabled": True, "removed": {"$ne": True}},
                 {
                     "_id": 1,
                     "service_name": 1,
@@ -433,7 +464,7 @@ class Database:
 
     def get_log_monitored_services(self):
         """קבלת רשימת שירותים עם ניטור לוגים פעיל"""
-        return list(self.services.find({"log_monitoring.enabled": True}))
+        return list(self.services.find({"log_monitoring.enabled": True, "removed": {"$ne": True}}))
 
     def get_log_monitoring_settings(self, service_id: str) -> dict:
         """קבלת הגדרות ניטור לוגים של שירות"""
