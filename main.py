@@ -293,6 +293,12 @@ class RenderMonitorBot:
             )
         )
         self.app.add_handler(
+            CallbackQueryHandler(
+                self.remove_service_action_callback,
+                pattern="^confirmremove_|^remove_|^back_to_service_",
+            )
+        )
+        self.app.add_handler(
             CallbackQueryHandler(self.suspend_button_callback, pattern="^confirm_suspend_all|^cancel_suspend$")
         )
         self.app.add_handler(
@@ -1107,33 +1113,132 @@ class RenderMonitorBot:
 
         # Extract service_id from callback data
         service_id = query.data.replace("manage_", "")
-        service = self.db.get_service_activity(service_id)
+        await self._show_service_manage_actions_menu(query, service_id)
 
-        if not service:
+    def _escape_markdown(self, text: str) -> str:
+        """Escape בסיסי כדי למנוע שבירת Markdown בטלגרם."""
+        return str(text).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+
+    def _can_remove_service(self, user_obj, service_doc: dict) -> bool:
+        """הרשאות הסרה: owner או אדמין. לשירות ללא owner - רק אדמין."""
+        if self._is_admin_user(user_obj):
+            return True
+        if not user_obj:
+            return False
+        owner_id = service_doc.get("owner_id")
+        if owner_id:
+            return str(owner_id) == str(getattr(user_obj, "id", ""))
+        return False
+
+    async def _show_service_manage_actions_menu(self, query: CallbackQuery, service_id: str) -> None:
+        """מציג תפריט פעולות לשירות (השעיה/הפעלה/הסרה) לאחר בחירת שירות."""
+        service = self.db.get_service_activity(service_id)
+        if not service or service.get("removed") is True:
             await query.edit_message_text("❌ שירות לא נמצא")
             return
 
         service_name = service.get("service_name", service_id)
         status = service.get("status", "active")
 
-        # בניית תפריט לשירות
         keyboard = []
-
         if status == "suspended":
             keyboard.append([InlineKeyboardButton("▶️ הפעל מחדש", callback_data=f"resume_{service_id}")])
         else:
             keyboard.append([InlineKeyboardButton("⏸️ השעה", callback_data=f"suspend_{service_id}")])
 
+        # כפתור הסרה (רק אם יש הרשאה)
+        if self._can_remove_service(query.from_user, service):
+            keyboard.append([InlineKeyboardButton("🗑 הסר שירות", callback_data=f"confirmremove_{service_id}")])
+
         keyboard.append([InlineKeyboardButton("🔙 חזור", callback_data="back_to_manage")])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        message = f"🤖 *{service_name}*\n"
-        message += f"🆔 `{service_id}`\n"
+        safe_name = self._escape_markdown(str(service_name))
+        message = f"🤖 *{safe_name}*\n"
+        message += f"🆔 `{self._escape_markdown(service_id)}`\n"
         message += f"📊 סטטוס: {'🔴 מושעה' if status == 'suspended' else '🟢 פעיל'}\n\n"
         message += "בחר פעולה:"
 
         await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
+    async def remove_service_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """אישור והסרה של שירות מרשימת הניהול (DB בלבד; לא מוחק מ-Render)."""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+        await query.answer()
+
+        data = query.data
+        user = query.from_user
+        user_id = getattr(user, "id", None)
+
+        # חזרה למסך שירות
+        if data.startswith("back_to_service_"):
+            service_id = data.split("_", 3)[3]
+            await self._show_service_manage_actions_menu(query, service_id)
+            return
+
+        # שלב 1: אישור הסרה
+        if data.startswith("confirmremove_"):
+            service_id = data.split("_", 1)[1]
+            service = self.db.get_service_activity(service_id)
+            if not service or service.get("removed") is True:
+                await query.edit_message_text("❌ שירות לא נמצא")
+                return
+
+            if not self._can_remove_service(user, service):
+                await query.answer("❌ אין הרשאה להסיר שירות זה", show_alert=True)
+                return
+
+            name = self._escape_markdown(str(service.get("service_name", service_id)))
+            safe_id = self._escape_markdown(service_id)
+            text = (
+                "🗑 *האם להסיר את השירות?*\n\n"
+                f"🤖 {name}\n"
+                f"🆔 `{safe_id}`\n\n"
+                "השירות יוסר מרשימת הניהול בלבד — הוא לא יימחק מ-Render."
+            )
+
+            keyboard = [
+                [InlineKeyboardButton("✅ כן, הסר", callback_data=f"remove_{service_id}")],
+                [InlineKeyboardButton("◀️ ביטול", callback_data=f"back_to_service_{service_id}")],
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            return
+
+        # שלב 2: ביצוע הסרה
+        if data.startswith("remove_"):
+            service_id = data.split("_", 1)[1]
+            service = self.db.get_service_activity(service_id)
+            if not service or service.get("removed") is True:
+                await query.edit_message_text("❌ שירות לא נמצא")
+                return
+
+            if not self._can_remove_service(user, service):
+                await query.answer("❌ אין הרשאה להסיר שירות זה", show_alert=True)
+                return
+
+            removed = False
+            try:
+                if user_id is None:
+                    raise ValueError("missing user_id")
+                removed = bool(self.db.remove_service_from_management(service_id, user_id=str(user_id)))
+            except Exception as e:
+                await query.edit_message_text(f"❌ שגיאה בהסרת השירות: {e}")
+                return
+
+            service_name = self._escape_markdown(str(service.get("service_name", service_id)))
+            if removed:
+                back_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור לניהול", callback_data="back_to_manage")]])
+                await query.edit_message_text(
+                    f"✅ השירות *{service_name}* הוסר מרשימת הניהול.",
+                    reply_markup=back_markup,
+                    parse_mode="Markdown",
+                )
+            else:
+                await query.edit_message_text("❌ שגיאה בהסרת השירות")
+            return
 
     async def service_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מטפל בלחיצה על כפתורי השעיה/הפעלה של שירות"""
