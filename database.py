@@ -169,6 +169,11 @@ class Database:
             },
         }
 
+        # MongoDB לא מאפשר את אותו שדה גם ב-$set וגם ב-$setOnInsert בזמן upsert שגורם ל-insert.
+        # אם force_owner_update פעיל, owner_id יגיע דרך $set (שמיושם גם ב-insert), ולכן נסיר אותו מ-$setOnInsert.
+        if force_owner_update:
+            set_on_insert.pop("owner_id", None)
+
         return self.services.update_one({"_id": service_id}, {"$set": update_set, "$setOnInsert": set_on_insert}, upsert=True)
 
     def ensure_services_exist(self, service_ids: Iterable[str], *, owner_id: Optional[str] = None):
