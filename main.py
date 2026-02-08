@@ -510,6 +510,21 @@ class RenderMonitorBot:
                         "נסה שוב או פנה לאדמין אם צריך להעביר בעלות."
                     )
                     return
+                if current and current.get("owner_id") and str(current.get("owner_id")) == owner_id:
+                    # מצב נפוץ ברייס: בקשה מקבילה כבר תפסה בעלות עבור אותו משתמש.
+                    # נעדכן רק את שם השירות/updated_at בלי לגעת בבעלות, ונחזיר הצלחה.
+                    try:
+                        self.db.register_service(service_id, owner_id=owner_id, service_name=final_name)
+                    except Exception:
+                        pass
+                    safe_name = str(final_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+                    await msg.reply_text(
+                        f"✅ השירות כבר רשום על שמך!\n\n"
+                        f"🤖 שם: *{safe_name}*\n"
+                        f"🆔 ID: `{service_id}`",
+                        parse_mode="Markdown",
+                    )
+                    return
                 if current is None:
                     await msg.reply_text("❌ השירות לא נמצא במסד הנתונים כרגע (ייתכן שנמחק). נסה שוב.")
                     return
