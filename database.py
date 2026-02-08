@@ -171,14 +171,6 @@ class Database:
 
         return self.services.update_one({"_id": service_id}, {"$set": update_set, "$setOnInsert": set_on_insert}, upsert=True)
 
-    def get_service_owner_id(self, service_id: str) -> Optional[str]:
-        """מחזיר owner_id של שירות אם קיים."""
-        service = self.services.find_one({"_id": service_id}, {"owner_id": 1})
-        if not service:
-            return None
-        owner = service.get("owner_id")
-        return str(owner) if owner is not None else None
-
     def ensure_services_exist(self, service_ids: Iterable[str], *, owner_id: Optional[str] = None):
         """ודא שמספר שירותים קיימים במסד (ללא עדכון מסמכים קיימים)."""
         count = 0

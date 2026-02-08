@@ -443,9 +443,10 @@ class RenderMonitorBot:
         final_name = requested_name or render_name or service_id
         owner_id = str(user.id)
 
-        # מניעת "חטיפה": אם השירות כבר רשום עם owner אחר, רק אדמין יכול להעביר בעלות
+        # מניעת "חטיפה": אם השירות כבר רשום עם owner אחר, רק אדמין יכול להעביר בעלות.
+        # אם השירות קיים במסד ללא owner (למשל seeded מ-SERVICES_TO_MONITOR), המשתמש הראשון שיקרא /add_service "יתפוס" בעלות.
         try:
-            existing = self.db.get_service_activity(service_id) or {}
+            existing = self.db.get_service_activity(service_id)
         except Exception as e:
             await msg.reply_text(
                 "❌ לא הצלחתי לקרוא מה-DB כדי לוודא בעלות (ייתכן תקלה זמנית).\n"
@@ -453,16 +454,22 @@ class RenderMonitorBot:
             )
             return
 
-        existing_owner = existing.get("owner_id")
         force_owner_update = False
-        if existing_owner and str(existing_owner) != owner_id:
-            if not self._is_admin_user(user):
-                await msg.reply_text(
-                    "❌ השירות הזה כבר רשום במערכת תחת owner אחר.\n"
-                    "אם זה שירות שלך, פנה לאדמין כדי להעביר בעלות.",
-                )
-                return
-            force_owner_update = True
+        if existing is not None:
+            existing_owner = existing.get("owner_id")
+            if existing_owner:
+                # יש בעלות קיימת - לא מאפשרים שינוי למשתמש רגיל
+                if str(existing_owner) != owner_id:
+                    if not self._is_admin_user(user):
+                        await msg.reply_text(
+                            "❌ השירות הזה כבר רשום במערכת תחת owner אחר.\n"
+                            "אם זה שירות שלך, פנה לאדמין כדי להעביר בעלות.",
+                        )
+                        return
+                    force_owner_update = True
+            else:
+                # שירות קיים אך ללא owner_id - נאפשר למשתמש לתפוס בעלות
+                force_owner_update = True
 
         try:
             self.db.register_service(
