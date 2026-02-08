@@ -219,6 +219,7 @@ class RenderMonitorBot:
             BotCommand("start", "🚀 הפעלת הבוט"),
             BotCommand("status", "📊 סטטוס כל השירותים"),
             BotCommand("plans", "💳 מידע על תוכנית ודיסק לכל שירות"),
+            BotCommand("add_service", "➕ הוספת שירות למערכת"),
             BotCommand("manage", "🎛️ ניהול שירותים"),
             BotCommand("monitor_manage", "👁️ ניהול ניטור סטטוס"),
             BotCommand("suspend", "⏸️ השעיית כל השירותים"),
@@ -248,6 +249,7 @@ class RenderMonitorBot:
         """הוספת command handlers"""
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("status", self.status_command))
+        self.app.add_handler(CommandHandler("add_service", self.add_service_command))
         self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(CommandHandler("delete_service", self.delete_service_command))
         self.app.add_handler(CommandHandler("suspend", self.suspend_command))
@@ -339,6 +341,7 @@ class RenderMonitorBot:
 
 /start - הפעלת הבוט
 /status - בדיקת סטטוס השירותים
+/add_service [service_id] [name] - הוספת שירות למערכת (עם אימות מול Render)
 /suspend - השעיית כל השירותים
 /resume - החזרת כל השירותים המושעים
 /list_suspended - רשימת שירותים מושעים
@@ -395,6 +398,78 @@ class RenderMonitorBot:
         if msg is None:
             return
         await msg.reply_text(help_text, parse_mode="Markdown")
+
+    async def add_service_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הוספת שירות חדש למעקב: /add_service <service_id> <name>
+
+        הבוט מוודא שהשירות קיים דרך Render API (GET /services/{service_id}),
+        ואם קיים — שומר ב-MongoDB עם owner_id.
+        """
+        msg = update.message
+        if msg is None:
+            return
+
+        user = update.effective_user
+        if user is None:
+            return
+
+        if not context.args or len(context.args) < 1:
+            await msg.reply_text(
+                "שימוש: `/add_service <service_id> <name>`\n\n"
+                "דוגמה: `/add_service srv-123456 My Bot`",
+                parse_mode="Markdown",
+            )
+            return
+
+        service_id = str(context.args[0]).strip()
+        requested_name = " ".join(context.args[1:]).strip() if len(context.args) > 1 else ""
+
+        # אימות מול Render: GET /services/{service_id}
+        service_info = None
+        try:
+            service_info = self.render_api.get_service_info(service_id)
+        except Exception:
+            service_info = None
+
+        if not service_info:
+            await msg.reply_text(
+                f"❌ השירות לא נמצא ב-Render או שה-ID שגוי\n\n"
+                f"בדוק את המזהה ונסה שוב: `{service_id}`",
+                parse_mode="Markdown",
+            )
+            return
+
+        render_name = str(service_info.get("name") or service_info.get("serviceName") or service_info.get("slug") or "").strip()
+        final_name = requested_name or render_name or service_id
+        owner_id = str(user.id)
+
+        # מניעת "חטיפה": אם השירות כבר רשום עם owner אחר, רק אדמין יכול לעדכן owner
+        try:
+            existing = self.db.get_service_activity(service_id) or {}
+            existing_owner = existing.get("owner_id")
+            if existing_owner and str(existing_owner) != owner_id and not self._is_admin_user(user):
+                await msg.reply_text(
+                    "❌ השירות הזה כבר רשום במערכת תחת owner אחר.\n"
+                    "אם זה שירות שלך, פנה לאדמין כדי להעביר בעלות.",
+                )
+                return
+        except Exception:
+            # אם יש בעיה בקריאה מה-DB, ננסה להמשיך לרישום (ייתכן DB חדש/ריק)
+            pass
+
+        try:
+            self.db.register_service(service_id, owner_id=owner_id, service_name=final_name)
+        except Exception as e:
+            await msg.reply_text(f"❌ כשל ברישום השירות במסד הנתונים: {e}")
+            return
+
+        safe_name = str(final_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+        await msg.reply_text(
+            f"✅ השירות נוסף בהצלחה!\n\n"
+            f"🤖 שם: *{safe_name}*\n"
+            f"🆔 ID: `{service_id}`",
+            parse_mode="Markdown",
+        )
 
     async def delete_service_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """מחיקת שירות והיסטורייתו מה-DB (אדמין בלבד)"""
@@ -2309,6 +2384,18 @@ def main():
     if fatal:
         # נמשיך להריץ כדי שהבוט ינסה להדפיס עוד דיאגנוסטיקות/לוגים
         print("⚠️ ממשיך לרוץ במצב דיאגנוסטיקה למרות חסרים בהגדרות…")
+
+    # תאימות לאחור: ודא ששירותים מה-config נשמרים במסד כדי שיופיעו ב-/status וב-/manage
+    try:
+        seed_services = list(getattr(config, "SERVICES_TO_MONITOR", []) or [])
+        if seed_services:
+            owner_for_seed = None
+            if config.ADMIN_CHAT_ID and config.ADMIN_CHAT_ID != "your_admin_chat_id_here":
+                owner_for_seed = str(config.ADMIN_CHAT_ID)
+            inserted_count = db.ensure_services_exist(seed_services, owner_id=owner_for_seed)
+            print(f"INFO: Seeded/ensured {inserted_count} services from config.SERVICES_TO_MONITOR")
+    except Exception as e:
+        print(f"WARNING: Failed to seed SERVICES_TO_MONITOR into MongoDB: {e}")
 
     # יצירת בוט
     bot = RenderMonitorBot()
