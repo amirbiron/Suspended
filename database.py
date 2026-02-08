@@ -127,7 +127,14 @@ class Database:
 
         return self.services.update_one({"_id": service_id}, {"$setOnInsert": base_doc}, upsert=True)
 
-    def register_service(self, service_id: str, owner_id: str, service_name: str):
+    def register_service(
+        self,
+        service_id: str,
+        owner_id: str,
+        service_name: str,
+        *,
+        force_owner_update: bool = False,
+    ):
         """רישום שירות חדש (או עדכון שם) עם owner.
 
         שומר ב-`service_activity` עם `_id`=service_id ומוסיף owner_id.
@@ -135,21 +142,26 @@ class Database:
         now = datetime.now(timezone.utc)
         owner_str = str(owner_id)
 
-        update_set = {
+        update_set: dict = {
             "updated_at": now,
             "service_name": service_name,
-            "owner_id": owner_str,
-            "registered_at": now,
-            "registered_by": owner_str,
         }
 
-        set_on_insert = {
+        # כברירת מחדל: לא דורסים בעלות קיימת.
+        # אם רוצים להעביר בעלות (אדמין/תהליך ייעודי) אפשר להפעיל force_owner_update.
+        if force_owner_update:
+            update_set["owner_id"] = owner_str
+
+        set_on_insert: dict = {
             "created_at": now,
             "status": "active",
             "last_user_activity": now,
             "inactive_days": 0,
             "total_users": 0,
             "suspend_count": 0,
+            "owner_id": owner_str,
+            "registered_at": now,
+            "registered_by": owner_str,
             "notification_settings": {
                 "alert_after_days": config.INACTIVE_DAYS_ALERT,
                 "auto_suspend_after_days": config.AUTO_SUSPEND_DAYS,

@@ -443,22 +443,34 @@ class RenderMonitorBot:
         final_name = requested_name or render_name or service_id
         owner_id = str(user.id)
 
-        # מניעת "חטיפה": אם השירות כבר רשום עם owner אחר, רק אדמין יכול לעדכן owner
+        # מניעת "חטיפה": אם השירות כבר רשום עם owner אחר, רק אדמין יכול להעביר בעלות
         try:
             existing = self.db.get_service_activity(service_id) or {}
-            existing_owner = existing.get("owner_id")
-            if existing_owner and str(existing_owner) != owner_id and not self._is_admin_user(user):
+        except Exception as e:
+            await msg.reply_text(
+                "❌ לא הצלחתי לקרוא מה-DB כדי לוודא בעלות (ייתכן תקלה זמנית).\n"
+                f"נסה שוב בעוד רגע.\n\nשגיאה: {e}"
+            )
+            return
+
+        existing_owner = existing.get("owner_id")
+        force_owner_update = False
+        if existing_owner and str(existing_owner) != owner_id:
+            if not self._is_admin_user(user):
                 await msg.reply_text(
                     "❌ השירות הזה כבר רשום במערכת תחת owner אחר.\n"
                     "אם זה שירות שלך, פנה לאדמין כדי להעביר בעלות.",
                 )
                 return
-        except Exception:
-            # אם יש בעיה בקריאה מה-DB, ננסה להמשיך לרישום (ייתכן DB חדש/ריק)
-            pass
+            force_owner_update = True
 
         try:
-            self.db.register_service(service_id, owner_id=owner_id, service_name=final_name)
+            self.db.register_service(
+                service_id,
+                owner_id=owner_id,
+                service_name=final_name,
+                force_owner_update=force_owner_update,
+            )
         except Exception as e:
             await msg.reply_text(f"❌ כשל ברישום השירות במסד הנתונים: {e}")
             return
