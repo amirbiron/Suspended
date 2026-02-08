@@ -480,21 +480,42 @@ class RenderMonitorBot:
                 force_owner_update=force_owner_update,
                 claim_owner_if_unowned=claim_owner_if_unowned,
             )
-        except Exception as e:
-            await msg.reply_text(f"❌ כשל ברישום השירות במסד הנתונים: {e}")
-            return
-
-        # אם ניסינו "לתפוס" בעלות והשירות נתפס במקביל ע"י משתמש אחר, העדכון לא יתאים לפילטר
-        try:
-            if claim_owner_if_unowned and getattr(result, "matched_count", 0) == 0 and getattr(result, "upserted_id", None) is None:
+        except DuplicateKeyError:
+            # מצב קצה: התנגשות בזמן upsert/insert. אם ניסינו claim — סביר שמישהו אחר תפס קודם.
+            if claim_owner_if_unowned:
                 await msg.reply_text(
                     "❌ לא הצלחתי לתפוס בעלות על השירות כי הוא נרשם בדיוק עכשיו על ידי משתמש אחר.\n"
                     "נסה שוב או פנה לאדמין אם צריך להעביר בעלות."
                 )
                 return
-        except Exception:
-            # אם אין לנו metadata מספקת על התוצאה, נמשיך עם הודעת הצלחה
-            pass
+            await msg.reply_text("❌ כשל ברישום השירות במסד הנתונים (Duplicate key). נסה שוב.")
+            return
+        except Exception as e:
+            await msg.reply_text(f"❌ כשל ברישום השירות במסד הנתונים: {e}")
+            return
+
+        # אם ניסינו "לתפוס" בעלות והשירות נתפס במקביל ע"י משתמש אחר, העדכון לא יתאים לפילטר
+        if claim_owner_if_unowned:
+            matched = getattr(result, "matched_count", 0)
+            modified = getattr(result, "modified_count", 0)
+            if matched == 0 and modified == 0:
+                # או שהשירות כבר קיבל owner, או שהוא נמחק/לא קיים — נבדוק כדי להחזיר הודעה נכונה
+                try:
+                    current = self.db.get_service_activity(service_id)
+                except Exception:
+                    current = None
+                if current and current.get("owner_id") and str(current.get("owner_id")) != owner_id:
+                    await msg.reply_text(
+                        "❌ לא הצלחתי לתפוס בעלות על השירות כי הוא נרשם בדיוק עכשיו על ידי משתמש אחר.\n"
+                        "נסה שוב או פנה לאדמין אם צריך להעביר בעלות."
+                    )
+                    return
+                if current is None:
+                    await msg.reply_text("❌ השירות לא נמצא במסד הנתונים כרגע (ייתכן שנמחק). נסה שוב.")
+                    return
+                # אם owner עדיין חסר אך לא הצלחנו לעדכן—נחזיר הודעה כללית כדי לא להטעות
+                await msg.reply_text("❌ לא הצלחתי לעדכן בעלות כרגע. נסה שוב בעוד רגע.")
+                return
 
         safe_name = str(final_name).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
         await msg.reply_text(

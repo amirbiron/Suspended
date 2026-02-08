@@ -190,7 +190,11 @@ class Database:
                 ],
             }
 
-        return self.services.update_one(filter_doc, {"$set": update_set, "$setOnInsert": set_on_insert}, upsert=True)
+        # חשוב: כשמבצעים claim_owner_if_unowned אנחנו לא רוצים upsert.
+        # אם הפילטר לא מתאים בגלל שמישהו כבר תפס בעלות, upsert היה מנסה לבצע insert עם אותו _id וגורם ל-DuplicateKeyError.
+        upsert_flag = False if claim_owner_if_unowned else True
+
+        return self.services.update_one(filter_doc, {"$set": update_set, "$setOnInsert": set_on_insert}, upsert=upsert_flag)
 
     def ensure_services_exist(self, service_ids: Iterable[str], *, owner_id: Optional[str] = None):
         """ודא שמספר שירותים קיימים במסד (ללא עדכון מסמכים קיימים)."""
