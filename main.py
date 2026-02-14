@@ -2556,6 +2556,11 @@ class RenderMonitorBot:
         time_str = context.args[0].lower()
         reminder_text = " ".join(context.args[1:])
 
+        # הגבלת אורך טקסט תזכורת
+        if len(reminder_text) > 500:
+            await msg.reply_text("❌ טקסט התזכורת ארוך מדי (מקסימום 500 תווים)")
+            return
+
         # פירוק זמן
         time_match = re.match(r"^(\d+)([mhdw])$", time_str)
         if not time_match:
@@ -2661,10 +2666,16 @@ class RenderMonitorBot:
             else:
                 time_remaining = f"בעוד {remaining.seconds // 60} דקות"
 
-            safe_text = str(reminder["text"]).replace("*", "\\*").replace("_", "\\_")
-            message += f"{i}. 📌 {safe_text}\n"
-            message += f"   📅 {date_str} ({time_remaining})\n"
-            message += f"   🆔 `{reminder['_id']}`\n\n"
+            safe_text = str(reminder["text"]).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+            entry = f"{i}. 📌 {safe_text}\n"
+            entry += f"   📅 {date_str} ({time_remaining})\n"
+            entry += f"   🆔 `{reminder['_id']}`\n\n"
+
+            # פיצול הודעות אם חורגים ממגבלת טלגרם (4096 תווים)
+            if len(message) + len(entry) > 3900:
+                await msg.reply_text(message, parse_mode="Markdown")
+                message = ""
+            message += entry
 
         message += "למחיקת תזכורת: `/delete_reminder <id>`"
         await msg.reply_text(message, parse_mode="Markdown")
@@ -2725,21 +2736,30 @@ def check_and_send_reminders():
     """בדיקה ושליחת תזכורות שהגיע זמנן"""
     from notifications import send_reminder_notification
 
+    MAX_SEND_ATTEMPTS = 5
+
     try:
         pending = db.get_pending_reminders()
         for reminder in pending:
             chat_id = str(reminder.get("chat_id", ""))
             text = reminder.get("text", "")
-            if chat_id and text:
-                sent = send_reminder_notification(chat_id, text)
-                if sent:
-                    db.mark_reminder_sent(reminder["_id"])
-                    logging.info(f"Reminder sent: {reminder['_id']}")
-                else:
-                    logging.warning(f"Failed to send reminder: {reminder['_id']}")
-            else:
-                # תזכורת לא תקינה — נסמן כנשלחה כדי לא לנסות שוב
+            attempts = reminder.get("send_attempts", 0)
+
+            if not chat_id or not text or attempts >= MAX_SEND_ATTEMPTS:
+                # תזכורת לא תקינה או חרגה מנסיונות — נסמן כנשלחה
                 db.mark_reminder_sent(reminder["_id"])
+                if attempts >= MAX_SEND_ATTEMPTS:
+                    logging.warning(f"Reminder {reminder['_id']} abandoned after {attempts} failed attempts")
+                continue
+
+            sent = send_reminder_notification(chat_id, text)
+            if sent:
+                db.mark_reminder_sent(reminder["_id"])
+                logging.info(f"Reminder sent: {reminder['_id']}")
+            else:
+                # עדכון מונה נסיונות כדי למנוע ניסיונות אינסופיים
+                db.increment_reminder_attempts(reminder["_id"])
+                logging.warning(f"Failed to send reminder: {reminder['_id']} (attempt {attempts + 1})")
     except Exception as e:
         logging.error(f"Error checking reminders: {e}")
 

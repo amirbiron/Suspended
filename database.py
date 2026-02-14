@@ -558,6 +558,17 @@ class Database:
         })
         return bool(result.deleted_count)
 
+    def increment_reminder_attempts(self, reminder_id) -> bool:
+        """העלאת מונה נסיונות שליחה של תזכורת"""
+        from bson import ObjectId
+        if not isinstance(reminder_id, ObjectId):
+            reminder_id = ObjectId(reminder_id)
+        result = self.reminders.update_one(
+            {"_id": reminder_id},
+            {"$inc": {"send_attempts": 1}}
+        )
+        return bool(result.modified_count)
+
 
 # יצירת instance גלובלי
 db = Database()
