@@ -2590,7 +2590,7 @@ class RenderMonitorBot:
             await msg.reply_text("❌ לא ניתן ליצור תזכורת לפחות מדקה")
             return
 
-        if delta.days > 365:
+        if delta.total_seconds() > 365 * 24 * 3600:
             await msg.reply_text("❌ לא ניתן ליצור תזכורת ליותר משנה")
             return
 
@@ -2612,9 +2612,10 @@ class RenderMonitorBot:
         remind_at_local = remind_at.astimezone(tz_il)
         date_str = remind_at_local.strftime("%d/%m/%Y %H:%M")
 
+        safe_text = str(reminder_text).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
         await msg.reply_text(
             f"✅ תזכורת נוצרה בהצלחה!\n\n"
-            f"📌 *{reminder_text}*\n"
+            f"📌 *{safe_text}*\n"
             f"⏰ תישלח בעוד {amount} {unit_label}\n"
             f"📅 ({date_str})\n\n"
             f"🆔 מזהה: `{reminder_id}`",

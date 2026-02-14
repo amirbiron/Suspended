@@ -198,7 +198,8 @@ def send_deploy_event_notification(
 
 def send_reminder_notification(chat_id: str, reminder_text: str) -> bool:
     """שליחת תזכורת למשתמש"""
-    message = f"📌 *תזכורת*\n\n{reminder_text}"
+    safe_text = str(reminder_text).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+    message = f"📌 *תזכורת*\n\n{safe_text}"
     return _send_to_chat(chat_id, message, title="⏰ תזכורת!")
 
 
