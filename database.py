@@ -15,6 +15,7 @@ class Database:
         self.manual_actions = self.db.manual_actions  # Collection for manual actions
         self.status_changes = self.db.status_changes  # Collection for status change history
         self.deploy_events = self.db.deploy_events  # היסטוריית דיפלויים אחרונים שדווחו
+        self.reminders = self.db.reminders  # תזכורות משתמשים
 
     def get_service_activity(self, service_id):
         """קבלת נתוני פעילות של שירות"""
@@ -504,6 +505,58 @@ class Database:
             {"_id": service_id},
             {"$set": {"log_monitoring.error_threshold": error_threshold}}
         )
+
+    # ===== תזכורות =====
+
+    def create_reminder(self, user_id: int, text: str, remind_at: datetime, chat_id: int) -> str:
+        """יצירת תזכורת חדשה. מחזיר את ה-ID של התזכורת."""
+        now = datetime.now(timezone.utc)
+        result = self.reminders.insert_one({
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "text": text,
+            "remind_at": remind_at,
+            "created_at": now,
+            "sent": False,
+        })
+        return str(result.inserted_id)
+
+    def get_pending_reminders(self) -> list:
+        """קבלת תזכורות שהגיע זמנן ועדיין לא נשלחו"""
+        now = datetime.now(timezone.utc)
+        return list(self.reminders.find({
+            "remind_at": {"$lte": now},
+            "sent": False,
+        }))
+
+    def mark_reminder_sent(self, reminder_id) -> bool:
+        """סימון תזכורת כנשלחה"""
+        from bson import ObjectId
+        if not isinstance(reminder_id, ObjectId):
+            reminder_id = ObjectId(reminder_id)
+        result = self.reminders.update_one(
+            {"_id": reminder_id},
+            {"$set": {"sent": True, "sent_at": datetime.now(timezone.utc)}}
+        )
+        return bool(result.modified_count)
+
+    def get_user_reminders(self, user_id: int) -> list:
+        """קבלת כל התזכורות הפעילות של משתמש"""
+        return list(self.reminders.find({
+            "user_id": user_id,
+            "sent": False,
+        }).sort("remind_at", 1))
+
+    def delete_reminder(self, reminder_id, user_id: int) -> bool:
+        """מחיקת תזכורת (רק אם שייכת למשתמש)"""
+        from bson import ObjectId
+        if not isinstance(reminder_id, ObjectId):
+            reminder_id = ObjectId(reminder_id)
+        result = self.reminders.delete_one({
+            "_id": reminder_id,
+            "user_id": user_id,
+        })
+        return bool(result.deleted_count)
 
 
 # יצירת instance גלובלי
