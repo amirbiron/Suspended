@@ -2608,7 +2608,8 @@ class RenderMonitorBot:
         remind_at = datetime.now(timezone.utc) + delta
         user = update.effective_user
         user_id = user.id if user else 0
-        chat_id = msg.chat_id
+        # שליחת תזכורת תמיד בהודעה פרטית למשתמש (לא לקבוצה)
+        chat_id = user_id
 
         reminder_id = self.db.create_reminder(
             user_id=user_id,
