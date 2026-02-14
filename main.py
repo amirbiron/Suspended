@@ -2575,6 +2575,12 @@ class RenderMonitorBot:
         amount = int(time_match.group(1))
         unit = time_match.group(2)
 
+        # הגנה מפני ערכים גדולים מדי שגורמים ל-OverflowError ב-timedelta
+        max_amounts = {"m": 525960, "h": 8766, "d": 365, "w": 52}  # ~שנה לכל יחידה
+        if amount > max_amounts.get(unit, 365):
+            await msg.reply_text("❌ לא ניתן ליצור תזכורת ליותר משנה")
+            return
+
         if unit == "m":
             delta = timedelta(minutes=amount)
             unit_label = "דקות"
