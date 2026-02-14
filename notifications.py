@@ -196,6 +196,13 @@ def send_deploy_event_notification(
     return sent_admin
 
 
+def send_reminder_notification(chat_id: str, reminder_text: str) -> bool:
+    """שליחת תזכורת למשתמש"""
+    safe_text = str(reminder_text).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+    message = f"📌 *תזכורת*\n\n{safe_text}"
+    return _send_to_chat(chat_id, message, title="⏰ תזכורת!")
+
+
 def send_daily_report():
     """דוח יומי על מצב השירותים"""
     from database import db

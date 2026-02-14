@@ -239,6 +239,9 @@ class RenderMonitorBot:
         		BotCommand("env_list", "📝 רשימת משתני סביבה"),
         		BotCommand("env_set", "✏️ עדכון משתנה סביבה"),
         		BotCommand("env_delete", "🗑️ מחיקת משתנה סביבה"),
+        		BotCommand("remind", "⏰ יצירת תזכורת"),
+        		BotCommand("reminders", "📋 רשימת תזכורות"),
+        		BotCommand("delete_reminder", "🗑️ מחיקת תזכורת"),
         		BotCommand("help", "❓ עזרה ומידע"),
         ]
 
@@ -282,6 +285,11 @@ class RenderMonitorBot:
         self.app.add_handler(CommandHandler("env_list", self.env_list_command))
         self.app.add_handler(CommandHandler("env_set", self.env_set_command))
         self.app.add_handler(CommandHandler("env_delete", self.env_delete_command))
+
+        # Reminder commands
+        self.app.add_handler(CommandHandler("remind", self.remind_command))
+        self.app.add_handler(CommandHandler("reminders", self.reminders_command))
+        self.app.add_handler(CommandHandler("delete_reminder", self.delete_reminder_command))
 
         self.app.add_handler(
             CallbackQueryHandler(self.manage_service_callback, pattern="^manage_|^go_to_monitor_manage$|^suspend_all$")
@@ -387,6 +395,16 @@ class RenderMonitorBot:
     /env_list srv-123456
     /env_set srv-123456 API_KEY new_value_here
     /env_delete srv-123456 OLD_VAR
+
+*תזכורות:* ⏰
+/remind [time] [text] - יצירת תזכורת
+  • פורמטי זמן: 30m (דקות), 2h (שעות), 7d (ימים), 1w (שבועות)
+  דוגמאות:
+    /remind 7d לחדש שירות API
+    /remind 30d להשעות את הבוט
+    /remind 2h לבדוק דיפלוי
+/reminders - רשימת התזכורות הפעילות שלך
+/delete\_reminder [id] - מחיקת תזכורת
 
 *אדמין:*
 /delete_service [service_id] - מחיקת שירות מה-DB בלבד
@@ -2503,6 +2521,204 @@ class RenderMonitorBot:
         				parse_mode="Markdown"
         			)
 
+    # ===== פקודות תזכורות =====
+
+    async def remind_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """יצירת תזכורת: /remind <time> <text>
+
+        פורמטי זמן נתמכים:
+          30m  = 30 דקות
+          2h   = 2 שעות
+          7d   = 7 ימים
+          1w   = שבוע
+        """
+        msg = update.message
+        if msg is None:
+            return
+
+        if not context.args or len(context.args) < 2:
+            await msg.reply_text(
+                "❌ חסרים פרמטרים\n\n"
+                "שימוש: `/remind <זמן> <טקסט>`\n\n"
+                "פורמטי זמן:\n"
+                "• `30m` – 30 דקות\n"
+                "• `2h` – 2 שעות\n"
+                "• `7d` – 7 ימים\n"
+                "• `1w` – שבוע אחד\n\n"
+                "דוגמאות:\n"
+                "• `/remind 7d לחדש שירות API`\n"
+                "• `/remind 30d להשעות את הבוט`\n"
+                "• `/remind 2h לבדוק דיפלוי`",
+                parse_mode="Markdown",
+            )
+            return
+
+        time_str = context.args[0].lower()
+        reminder_text = " ".join(context.args[1:])
+
+        # הגבלת אורך טקסט תזכורת
+        if len(reminder_text) > 500:
+            await msg.reply_text("❌ טקסט התזכורת ארוך מדי (מקסימום 500 תווים)")
+            return
+
+        # פירוק זמן
+        time_match = re.match(r"^(\d+)([mhdw])$", time_str)
+        if not time_match:
+            await msg.reply_text(
+                "❌ פורמט זמן לא תקין\n\n"
+                "פורמטים נתמכים: `30m`, `2h`, `7d`, `1w`\n"
+                "m=דקות, h=שעות, d=ימים, w=שבועות",
+                parse_mode="Markdown",
+            )
+            return
+
+        amount = int(time_match.group(1))
+        unit = time_match.group(2)
+
+        # הגנה מפני ערכים גדולים מדי שגורמים ל-OverflowError ב-timedelta
+        max_amounts = {"m": 525960, "h": 8766, "d": 365, "w": 52}  # ~שנה לכל יחידה
+        if amount > max_amounts.get(unit, 365):
+            await msg.reply_text("❌ לא ניתן ליצור תזכורת ליותר משנה")
+            return
+
+        if unit == "m":
+            delta = timedelta(minutes=amount)
+            unit_label = "דקות"
+        elif unit == "h":
+            delta = timedelta(hours=amount)
+            unit_label = "שעות"
+        elif unit == "d":
+            delta = timedelta(days=amount)
+            unit_label = "ימים"
+        elif unit == "w":
+            delta = timedelta(weeks=amount)
+            unit_label = "שבועות"
+        else:
+            await msg.reply_text("❌ יחידת זמן לא מוכרת")
+            return
+
+        if delta.total_seconds() < 60:
+            await msg.reply_text("❌ לא ניתן ליצור תזכורת לפחות מדקה")
+            return
+
+        if delta.total_seconds() > 365 * 24 * 3600:
+            await msg.reply_text("❌ לא ניתן ליצור תזכורת ליותר משנה")
+            return
+
+        remind_at = datetime.now(timezone.utc) + delta
+        user = update.effective_user
+        user_id = user.id if user else 0
+        chat_id = msg.chat_id
+
+        reminder_id = self.db.create_reminder(
+            user_id=user_id,
+            text=reminder_text,
+            remind_at=remind_at,
+            chat_id=chat_id,
+        )
+
+        # פורמט תאריך בשעון ישראלי
+        import pytz
+        tz_il = pytz.timezone("Asia/Jerusalem")
+        remind_at_local = remind_at.astimezone(tz_il)
+        date_str = remind_at_local.strftime("%d/%m/%Y %H:%M")
+
+        safe_text = str(reminder_text).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+        await msg.reply_text(
+            f"✅ תזכורת נוצרה בהצלחה!\n\n"
+            f"📌 *{safe_text}*\n"
+            f"⏰ תישלח בעוד {amount} {unit_label}\n"
+            f"📅 ({date_str})\n\n"
+            f"🆔 מזהה: `{reminder_id}`",
+            parse_mode="Markdown",
+        )
+
+    async def reminders_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """הצגת כל התזכורות הפעילות: /reminders"""
+        msg = update.message
+        if msg is None:
+            return
+
+        user = update.effective_user
+        if user is None:
+            return
+
+        reminders = self.db.get_user_reminders(user.id)
+
+        if not reminders:
+            await msg.reply_text("📭 אין תזכורות פעילות\n\nהקש `/remind` ליצירת תזכורת חדשה", parse_mode="Markdown")
+            return
+
+        import pytz
+        tz_il = pytz.timezone("Asia/Jerusalem")
+
+        message = f"⏰ *התזכורות שלך ({len(reminders)}):*\n\n"
+        for i, reminder in enumerate(reminders, 1):
+            remind_at = reminder["remind_at"]
+            if remind_at.tzinfo is None:
+                remind_at = remind_at.replace(tzinfo=timezone.utc)
+            remind_at_local = remind_at.astimezone(tz_il)
+            date_str = remind_at_local.strftime("%d/%m/%Y %H:%M")
+
+            # חישוב הזמן שנותר
+            now = datetime.now(timezone.utc)
+            remaining = remind_at - now
+            if remaining.total_seconds() <= 0:
+                time_remaining = "ממתינה לשליחה"
+            elif remaining.days > 0:
+                time_remaining = f"בעוד {remaining.days} ימים"
+            elif remaining.seconds >= 3600:
+                time_remaining = f"בעוד {remaining.seconds // 3600} שעות"
+            else:
+                time_remaining = f"בעוד {remaining.seconds // 60} דקות"
+
+            safe_text = str(reminder["text"]).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
+            entry = f"{i}. 📌 {safe_text}\n"
+            entry += f"   📅 {date_str} ({time_remaining})\n"
+            entry += f"   🆔 `{reminder['_id']}`\n\n"
+
+            # פיצול הודעות אם חורגים ממגבלת טלגרם (4096 תווים)
+            if len(message) + len(entry) > 3900:
+                await msg.reply_text(message, parse_mode="Markdown")
+                message = ""
+            message += entry
+
+        message += "למחיקת תזכורת: `/delete_reminder <id>`"
+        await msg.reply_text(message, parse_mode="Markdown")
+
+    async def delete_reminder_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """מחיקת תזכורת: /delete_reminder <id>"""
+        msg = update.message
+        if msg is None:
+            return
+
+        user = update.effective_user
+        if user is None:
+            return
+
+        if not context.args:
+            await msg.reply_text(
+                "❌ חסר מזהה תזכורת\n\n"
+                "שימוש: `/delete_reminder <id>`\n\n"
+                "הקש `/reminders` לראות את כל התזכורות שלך",
+                parse_mode="Markdown",
+            )
+            return
+
+        reminder_id_str = context.args[0]
+        try:
+            from bson import ObjectId
+            ObjectId(reminder_id_str)  # וידוא שזה ID תקין
+        except Exception:
+            await msg.reply_text("❌ מזהה תזכורת לא תקין")
+            return
+
+        deleted = self.db.delete_reminder(reminder_id_str, user.id)
+        if deleted:
+            await msg.reply_text("✅ התזכורת נמחקה בהצלחה")
+        else:
+            await msg.reply_text("❌ התזכורת לא נמצאה או שאינה שייכת לך")
+
 
 # ✨ פונקציה שמטפלת בשגיאות
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -2522,6 +2738,44 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.error("❌ Exception while handling an update:", exc_info=context.error)
 
 
+def check_and_send_reminders():
+    """בדיקה ושליחת תזכורות שהגיע זמנן"""
+    from notifications import send_reminder_notification
+
+    MAX_SEND_ATTEMPTS = 5
+
+    try:
+        pending = db.get_pending_reminders()
+        for reminder in pending:
+            chat_id = str(reminder.get("chat_id", ""))
+            text = reminder.get("text", "")
+            attempts = reminder.get("send_attempts", 0)
+
+            if not chat_id or not text or attempts >= MAX_SEND_ATTEMPTS:
+                # תזכורת לא תקינה או חרגה מנסיונות — נסמן כנשלחה
+                db.mark_reminder_sent(reminder["_id"])
+                if attempts >= MAX_SEND_ATTEMPTS:
+                    logging.warning(f"Reminder {reminder['_id']} abandoned after {attempts} failed attempts")
+                continue
+
+            # נסה לשלוח הודעה פרטית למשתמש תחילה, ואם נכשל — לצ'אט המקורי
+            user_id = str(reminder.get("user_id", ""))
+            sent = False
+            if user_id and user_id != chat_id:
+                sent = send_reminder_notification(user_id, text)
+            if not sent:
+                sent = send_reminder_notification(chat_id, text)
+            if sent:
+                db.mark_reminder_sent(reminder["_id"])
+                logging.info(f"Reminder sent: {reminder['_id']}")
+            else:
+                # עדכון מונה נסיונות כדי למנוע ניסיונות אינסופיים
+                db.increment_reminder_attempts(reminder["_id"])
+                logging.warning(f"Failed to send reminder: {reminder['_id']} (attempt {attempts + 1})")
+    except Exception as e:
+        logging.error(f"Error checking reminders: {e}")
+
+
 def run_scheduler():
     """הרצת המתזמן ברקע"""
     # בדיקה יומית בשעה 09:00
@@ -2529,6 +2783,9 @@ def run_scheduler():
 
     # דוח יומי בשעה 20:00
     schedule.every().day.at("20:00").do(send_daily_report)
+
+    # בדיקת תזכורות כל דקה
+    schedule.every(1).minutes.do(check_and_send_reminders)
 
     while True:
         schedule.run_pending()
