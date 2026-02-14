@@ -2608,8 +2608,7 @@ class RenderMonitorBot:
         remind_at = datetime.now(timezone.utc) + delta
         user = update.effective_user
         user_id = user.id if user else 0
-        # שליחת תזכורת תמיד בהודעה פרטית למשתמש (לא לקבוצה)
-        chat_id = user_id
+        chat_id = msg.chat_id
 
         reminder_id = self.db.create_reminder(
             user_id=user_id,
@@ -2759,7 +2758,13 @@ def check_and_send_reminders():
                     logging.warning(f"Reminder {reminder['_id']} abandoned after {attempts} failed attempts")
                 continue
 
-            sent = send_reminder_notification(chat_id, text)
+            # נסה לשלוח הודעה פרטית למשתמש תחילה, ואם נכשל — לצ'אט המקורי
+            user_id = str(reminder.get("user_id", ""))
+            sent = False
+            if user_id and user_id != chat_id:
+                sent = send_reminder_notification(user_id, text)
+            if not sent:
+                sent = send_reminder_notification(chat_id, text)
             if sent:
                 db.mark_reminder_sent(reminder["_id"])
                 logging.info(f"Reminder sent: {reminder['_id']}")
