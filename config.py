@@ -8,6 +8,13 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "your_telegram_bot_token_here")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "your_admin_chat_id_here")
 
+# GitHub Gist (optional)
+# Personal Access Token with `gist` scope is recommended for creating secret gists.
+GITHUB_GIST_TOKEN = os.getenv("GITHUB_GIST_TOKEN", "")
+
+# Custom emoji for the Gist button (Telegram Bot API 9.4+)
+GIST_BUTTON_CUSTOM_EMOJI_ID = os.getenv("GIST_BUTTON_CUSTOM_EMOJI_ID", "5368324170671202305")
+
 # Render API
 RENDER_API_KEY = os.getenv("RENDER_API_KEY", "your_render_api_key_here")
 RENDER_API_URL = "https://api.render.com/v1"

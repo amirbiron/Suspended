@@ -6,10 +6,12 @@ import re
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from urllib.parse import quote, unquote
 
+import httpx
 import schedule
 from pymongo.errors import DuplicateKeyError
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -337,6 +339,7 @@ class RenderMonitorBot:
                 pattern="^confirm_env_set_|^confirm_env_delete_|^cancel_env_action",
             )
         )
+        self.app.add_handler(CallbackQueryHandler(self.gist_action_callback, pattern="^create_gist_"))
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """פקודת התחלה"""
@@ -1891,10 +1894,132 @@ class RenderMonitorBot:
                 message += f"• הוסף פרמטר זמן: `/logs {service_id} 100 5` (5 דקות אחרונות)\n"
             message += f"• השורות מוצגות מהישן לחדש (כרונולוגית)"
 
-            await msg.reply_text(message, parse_mode="Markdown")
+            reply_markup = None
+            try:
+                gist_request_id = uuid.uuid4().hex[:10]
+
+                # Build full logs content for the Gist (not just the displayed snippet)
+                full_lines: List[str] = []
+                for log in logs:
+                    ts = str(log.get("timestamp", "") or "").strip()
+                    stream = str(log.get("stream", "") or "").strip()
+                    text = str(log.get("text", "") or "").rstrip("\n")
+                    prefix = ""
+                    if ts and stream:
+                        prefix = f"{ts} [{stream}] "
+                    elif ts:
+                        prefix = f"{ts} "
+                    elif stream:
+                        prefix = f"[{stream}] "
+                    full_lines.append(prefix + text)
+
+                gist_content = "\n".join(full_lines).strip() or "(no logs)"
+                safe_service_name = str(service_name).strip() or service_id
+                gist_description = f"Render logs for {safe_service_name} ({service_id})"
+                gist_filename = f"render-logs-{service_id}.log"
+
+                if context.user_data is not None:
+                    context.user_data[f"gist_payload_{gist_request_id}"] = {
+                        "filename": gist_filename,
+                        "description": gist_description,
+                        "content": gist_content,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+
+                gist_button = InlineKeyboardButton(
+                    "Gist",
+                    callback_data=f"create_gist_{gist_request_id}",
+                    api_kwargs={"icon_custom_emoji_id": config.GIST_BUTTON_CUSTOM_EMOJI_ID},
+                )
+                reply_markup = InlineKeyboardMarkup([[gist_button]])
+            except Exception:
+                reply_markup = None
+
+            await msg.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
 
         except Exception as e:
             await msg.reply_text(f"❌ שגיאה בקבלת לוגים: {e}")
+
+    async def _create_github_gist(self, *, filename: str, content: str, description: str) -> str:
+        """Create a secret GitHub Gist and return its URL."""
+        token = str(getattr(config, "GITHUB_GIST_TOKEN", "") or "").strip()
+        if not token:
+            raise ValueError("Missing GITHUB_GIST_TOKEN")
+
+        payload = {
+            "description": description or "",
+            "public": False,
+            "files": {filename: {"content": content}},
+        }
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"token {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post("https://api.github.com/gists", headers=headers, json=payload)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"GitHub API error {resp.status_code}: {resp.text}")
+
+        data = resp.json()
+        url = data.get("html_url") or data.get("url")
+        if not url:
+            raise RuntimeError("GitHub API did not return a gist URL")
+        return str(url)
+
+    async def gist_action_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Create a GitHub Gist from the last fetched logs and return the URL."""
+        query = update.callback_query
+        if query is None or query.data is None:
+            return
+
+        data = query.data
+        gist_request_id = data.replace("create_gist_", "", 1)
+
+        if context.user_data is None:
+            await query.answer("❌ אין זיכרון זמני (user_data) עבור יצירת גיסט", show_alert=True)
+            return
+
+        payload = context.user_data.get(f"gist_payload_{gist_request_id}")
+        if not payload:
+            await query.answer("❌ לא נמצאו נתונים ליצירת גיסט (ייתכן שפג תוקף). בקש לוגים מחדש.", show_alert=True)
+            return
+
+        if not str(getattr(config, "GITHUB_GIST_TOKEN", "") or "").strip():
+            await query.answer("❌ חסר GITHUB_GIST_TOKEN ליצירת גיסט (PAT עם gist scope).", show_alert=True)
+            return
+
+        await query.answer("יוצר גיסט...", show_alert=False)
+
+        try:
+            url = await self._create_github_gist(
+                filename=str(payload.get("filename", "render-logs.log")),
+                content=str(payload.get("content", "")),
+                description=str(payload.get("description", "Render logs")),
+            )
+        except Exception as e:
+            await query.answer(f"❌ כשל ביצירת גיסט: {e}", show_alert=True)
+            return
+
+        # Cleanup stored payload
+        try:
+            del context.user_data[f"gist_payload_{gist_request_id}"]
+        except Exception:
+            pass
+
+        # Remove button to prevent duplicate gists
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        # Send the URL
+        try:
+            await query.message.reply_text(f"✅ Gist נוצר:\n{url}")
+        except Exception:
+            # Fallback: answer as alert with truncated URL
+            await query.answer(f"✅ Gist נוצר: {url}", show_alert=True)
 
     async def errors_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """קיצור דרך לצפייה רק בשגיאות"""
