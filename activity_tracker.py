@@ -12,6 +12,7 @@ class ActivityTracker:
         self.inactive_days_alert = config.INACTIVE_DAYS_ALERT
         self.auto_suspend_days = config.AUTO_SUSPEND_DAYS
         self.auto_suspend_enabled = getattr(config, "AUTO_SUSPEND_ENABLED", False)
+        self.inactivity_alerts_enabled = getattr(config, "INACTIVITY_ALERTS_ENABLED", True)
 
     def record_bot_usage(self, service_id: str, user_id: int, service_name: Optional[str] = None) -> None:
         """רישום שימוש בבוט"""
@@ -25,7 +26,7 @@ class ActivityTracker:
         print("בודק שירותים לא פעילים...")
 
         # בדיקת שירותים להתראה (מותנה בדגל הפעלה)
-        if getattr(config, "INACTIVITY_ALERTS_ENABLED", True):
+        if self.inactivity_alerts_enabled:
             alert_services = db.get_inactive_services(self.inactive_days_alert)
             for service in alert_services:
                 self._send_inactivity_alert(service)
