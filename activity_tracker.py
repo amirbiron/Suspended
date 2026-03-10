@@ -22,15 +22,15 @@ class ActivityTracker:
 
     def check_inactive_services(self):
         """בדיקת שירותים לא פעילים והתראות"""
-        if not getattr(config, "INACTIVITY_ALERTS_ENABLED", True):
-            print("התראות חוסר פעילות כבויות (INACTIVITY_ALERTS_ENABLED=false)")
-            return
         print("בודק שירותים לא פעילים...")
 
-        # בדיקת שירותים להתראה
-        alert_services = db.get_inactive_services(self.inactive_days_alert)
-        for service in alert_services:
-            self._send_inactivity_alert(service)
+        # בדיקת שירותים להתראה (מותנה בדגל הפעלה)
+        if getattr(config, "INACTIVITY_ALERTS_ENABLED", True):
+            alert_services = db.get_inactive_services(self.inactive_days_alert)
+            for service in alert_services:
+                self._send_inactivity_alert(service)
+        else:
+            print("התראות חוסר פעילות כבויות (INACTIVITY_ALERTS_ENABLED=false)")
 
         # בדיקת שירותים להשעיה אוטומטית (מותנה בדגל הפעלה)
         if self.auto_suspend_enabled:
