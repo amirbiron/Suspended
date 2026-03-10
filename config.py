@@ -36,6 +36,9 @@ CHECK_INTERVAL_HOURS = 24  # בדיקה כל כמה שעות
 # אפשרות לבטל השעיה אוטומטית
 AUTO_SUSPEND_ENABLED = os.getenv("AUTO_SUSPEND_ENABLED", "false").lower() == "true"
 
+# אפשרות לבטל התראות חוסר פעילות
+INACTIVITY_ALERTS_ENABLED = os.getenv("INACTIVITY_ALERTS_ENABLED", "true").lower() == "true"
+
 # הגדרות ניטור סטטוס
 STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("STATUS_CHECK_INTERVAL_SECONDS", "300"))  # 5 minutes default
 STATUS_MONITORING_ENABLED = os.getenv("STATUS_MONITORING_ENABLED", "true").lower() == "true"
