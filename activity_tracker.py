@@ -22,6 +22,9 @@ class ActivityTracker:
 
     def check_inactive_services(self):
         """בדיקת שירותים לא פעילים והתראות"""
+        if not getattr(config, "INACTIVITY_ALERTS_ENABLED", True):
+            print("התראות חוסר פעילות כבויות (INACTIVITY_ALERTS_ENABLED=false)")
+            return
         print("בודק שירותים לא פעילים...")
 
         # בדיקת שירותים להתראה
