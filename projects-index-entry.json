@@ -1,0 +1,11 @@
+{
+  "name": "Suspended - בוט ניטור והשעיה חכמה ל-Render",
+  "repo": "https://github.com/amirbiron/Suspended",
+  "tags": ["telegram-bot", "python", "mongodb", "render-api", "devops", "monitoring", "automation"],
+  "highlights": [
+    "בוט טלגרם לניטור והשעיה אוטומטית של שירותי Render לחיסכון בעלויות",
+    "ניטור לוגים בזמן אמת עם זיהוי שגיאות רגילות וקריטיות",
+    "התראות דיפלוי אוטומטיות עם מעקב מעברי סטטוס",
+    "ארכיטקטורה מודולרית עם activity_reporter משותף לכל הבוטים"
+  ]
+}
