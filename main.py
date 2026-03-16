@@ -1039,7 +1039,7 @@ class RenderMonitorBot:
         for service in services:
             service_id = service["_id"]
             service_name = service.get("service_name", service_id)
-            status = service.get("status", "active")
+            status = await self._get_live_status(service_id)
 
             # אימוג'י לפי סטטוס
             if status == "suspended":
@@ -1081,7 +1081,7 @@ class RenderMonitorBot:
         for service in services:
             service_id = service["_id"]
             service_name = service.get("service_name", service_id)
-            status = service.get("status", "active")
+            status = await self._get_live_status(service_id)
 
             # אימוג'י לפי סטטוס
             if status == "suspended":
@@ -1133,6 +1133,36 @@ class RenderMonitorBot:
         service_id = query.data.replace("manage_", "")
         await self._show_service_manage_actions_menu(query, service_id)
 
+    async def _get_live_status(self, service_id: str) -> str:
+        """בודק סטטוס חי מ-Render API ומסנכרן עם הדאטאבייס.
+        מחזיר 'suspended' או 'active'.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            live_status = await loop.run_in_executor(
+                None, self.render_api.get_service_status, service_id
+            )
+            if live_status == "suspended":
+                # עדכון DB רק אם הסטטוס השתנה, כדי לא לדרוס את suspended_at
+                service = self.db.get_service_activity(service_id)
+                if not service or service.get("status") != "suspended":
+                    self.db.update_service_activity(service_id, status="suspended")
+                return "suspended"
+            elif live_status in ("unknown", None):
+                # סטטוס לא ברור — fallback לדאטאבייס, לא לדרוס
+                service = self.db.get_service_activity(service_id)
+                return service.get("status", "active") if service else "active"
+            else:
+                # סטטוס ברור שאינו suspended (online, deploying וכו׳) — עדכון DB אם צריך
+                service = self.db.get_service_activity(service_id)
+                if service and service.get("status") == "suspended":
+                    self.db.update_service_activity(service_id, status="active")
+                return "active"
+        except Exception:
+            # fallback לסטטוס מהדאטאבייס
+            service = self.db.get_service_activity(service_id)
+            return service.get("status", "active") if service else "active"
+
     def _escape_markdown(self, text: str) -> str:
         """Escape בסיסי כדי למנוע שבירת Markdown בטלגרם."""
         return str(text).replace("*", "\\*").replace("_", "\\_").replace("`", "\\`")
@@ -1156,7 +1186,7 @@ class RenderMonitorBot:
             return
 
         service_name = service.get("service_name", service_id)
-        status = service.get("status", "active")
+        status = await self._get_live_status(service_id)
 
         keyboard = []
         if status == "suspended":
