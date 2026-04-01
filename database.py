@@ -1,13 +1,9 @@
-import logging
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 import config
-
-logger = logging.getLogger(__name__)
 
 
 class Database:
