@@ -1,14 +1,29 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 import config
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
     def __init__(self):
-        self.client = MongoClient(config.MONGODB_URI)
+        self.client = MongoClient(
+            config.MONGODB_URI,
+            serverSelectionTimeoutMS=45000,
+            connectTimeoutMS=30000,
+            socketTimeoutMS=45000,
+            retryWrites=True,
+            retryReads=True,
+            maxPoolSize=10,
+            minPoolSize=1,
+            maxIdleTimeMS=60000,
+            waitQueueTimeoutMS=30000,
+        )
         self.db = self.client[config.DATABASE_NAME]
         self.services = self.db.service_activity
         self.user_interactions = self.db.user_interactions
