@@ -4,12 +4,16 @@ import threading
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+
 import config
 from database import db
 from notifications import send_deploy_event_notification, send_status_change_notification
 from render_api import render_api
 
 logger = logging.getLogger(__name__)
+
+TRANSIENT_DB_ERRORS = (ConnectionFailure, ServerSelectionTimeoutError)
 
 
 class StatusMonitor:
@@ -49,9 +53,22 @@ class StatusMonitor:
 
 	def _monitor_loop(self):
 		"""לולאת הניטור הראשית"""
+		consecutive_db_failures = 0
+		max_backoff = 300  # 5 minutes max backoff
+
 		while not self.stop_monitoring.is_set():
 			try:
 				self.check_all_services()
+				consecutive_db_failures = 0
+			except TRANSIENT_DB_ERRORS as e:
+				consecutive_db_failures += 1
+				backoff = min(10 * (2 ** (consecutive_db_failures - 1)), max_backoff)
+				logger.warning(
+					f"MongoDB connection error (attempt {consecutive_db_failures}), "
+					f"retrying in {backoff}s: {e}"
+				)
+				self.stop_monitoring.wait(backoff)
+				continue
 			except Exception as e:
 				logger.error(f"Error in monitoring loop: {e}")
 
