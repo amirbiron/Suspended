@@ -1,17 +1,30 @@
+import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 import config
+
+logger = logging.getLogger(__name__)
+
+# שגיאות חיבור שניתן להתאושש מהן
+TRANSIENT_DB_ERRORS = (ConnectionFailure, ServerSelectionTimeoutError)
 
 
 class Database:
     def __init__(self):
+        self._connected = False
+        self._connect()
+
+    def _connect(self):
+        """יצירת חיבור ל-MongoDB עם ניסיונות חוזרים."""
         self.client = MongoClient(
             config.MONGODB_URI,
-            serverSelectionTimeoutMS=45000,
-            connectTimeoutMS=30000,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
             socketTimeoutMS=45000,
             retryWrites=True,
             retryReads=True,
@@ -23,10 +36,44 @@ class Database:
         self.db = self.client[config.DATABASE_NAME]
         self.services = self.db.service_activity
         self.user_interactions = self.db.user_interactions
-        self.manual_actions = self.db.manual_actions  # Collection for manual actions
-        self.status_changes = self.db.status_changes  # Collection for status change history
-        self.deploy_events = self.db.deploy_events  # היסטוריית דיפלויים אחרונים שדווחו
-        self.reminders = self.db.reminders  # תזכורות משתמשים
+        self.manual_actions = self.db.manual_actions
+        self.status_changes = self.db.status_changes
+        self.deploy_events = self.db.deploy_events
+        self.reminders = self.db.reminders
+
+        # בדיקת חיבור ראשונית (לא חוסמת הפעלה)
+        try:
+            self.client.admin.command("ping")
+            self._connected = True
+            logger.info("MongoDB connection established successfully.")
+        except TRANSIENT_DB_ERRORS as e:
+            self._connected = False
+            logger.warning("MongoDB is not reachable at startup: %s. Bot will retry on each operation.", e)
+
+    @property
+    def is_connected(self) -> bool:
+        """בדיקה האם יש חיבור פעיל ל-MongoDB (תמיד בודק בפועל)."""
+        try:
+            self.client.admin.command("ping")
+            self._connected = True
+            return True
+        except TRANSIENT_DB_ERRORS:
+            self._connected = False
+            return False
+
+    def wait_for_connection(self, max_wait: int = 300, interval: int = 10) -> bool:
+        """חסימה עד שהחיבור ל-MongoDB חוזר (או timeout).
+
+        מחזיר True אם החיבור חזר, False אם עבר ה-timeout.
+        """
+        elapsed = 0
+        while elapsed < max_wait:
+            if self.is_connected:
+                return True
+            logger.info("Waiting for MongoDB connection... (%ds/%ds)", elapsed, max_wait)
+            time.sleep(interval)
+            elapsed += interval
+        return self.is_connected
 
     def get_service_activity(self, service_id):
         """קבלת נתוני פעילות של שירות"""
