@@ -67,18 +67,31 @@ LOCK_ID = "render_monitor_bot_lock"  # מזהה ייחודי למנעול שלנ
 def cleanup_mongo_lock():
     """מנקה את נעילת ה-MongoDB ביציאה"""
     try:
-        db.db.locks.delete_one({"_id": LOCK_ID})
-        print("INFO: MongoDB lock released.")
+        if db.is_connected:
+            db.db.locks.delete_one({"_id": LOCK_ID})
+            print("INFO: MongoDB lock released.")
     except Exception as e:
         print(f"ERROR: Could not release MongoDB lock on exit: {e}")
 
 
 def manage_mongo_lock():
-    """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה עם יציאה נקייה."""
+    """מנהל נעילה ב-MongoDB כדי למנוע ריצה כפולה עם יציאה נקייה.
+
+    אם MongoDB לא זמין — מדלגים על הנעילה ומאפשרים לבוט לעלות בלעדיה.
+    """
+    if not db.is_connected:
+        print("WARNING: MongoDB unavailable — skipping lock mechanism. Bot starting without lock.")
+        return
+
     pid = os.getpid()
     now = datetime.now(timezone.utc)
 
-    lock = db.db.locks.find_one({"_id": LOCK_ID})
+    try:
+        lock = db.db.locks.find_one({"_id": LOCK_ID})
+    except Exception as e:
+        print(f"WARNING: Could not check MongoDB lock ({e}). Starting without lock.")
+        return
+
     if lock:
         lock_time = lock.get("timestamp", now)
         if getattr(lock_time, "tzinfo", None) is None:
@@ -112,8 +125,7 @@ def manage_mongo_lock():
         print("INFO: Lock was acquired by another process just now. Exiting gracefully.")
         sys.exit(0)
     except Exception as e:
-        print(f"ERROR: Failed to acquire MongoDB lock: {e}")
-        sys.exit(1)
+        print(f"WARNING: Failed to acquire MongoDB lock ({e}). Starting without lock.")
 
 
 class RenderMonitorBot:
@@ -2763,6 +2775,21 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         sys.exit(0)
+
+    # שגיאות MongoDB — שולחים הודעה ידידותית למשתמש במקום קריסה
+    from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+    if isinstance(context.error, (ConnectionFailure, ServerSelectionTimeoutError)):
+        logger.warning("MongoDB connection error in command handler: %s", context.error)
+        if isinstance(update, Update) and update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    "⚠️ מסד הנתונים לא זמין כרגע.\n"
+                    "הבוט ממשיך לפעול — פקודות שלא דורשות מסד נתונים עדיין עובדות.\n"
+                    "נסה שוב בעוד כמה דקות."
+                )
+            except Exception:
+                pass
+        return
 
     # עבור כל שגיאה אחרת, מדפיסים את המידע המלא
     logging.error("❌ Exception while handling an update:", exc_info=context.error)
