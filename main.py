@@ -1438,10 +1438,14 @@ class RenderMonitorBot:
                 # fallback ישיר ל-Render API (בלי לעבור דרך _get_visible_services שינסה DB שוב)
                 try:
                     api_services = self.render_api.list_services()
-                    all_services = [
-                        {"_id": s.get("id", ""), "service_name": s.get("name", ""), "status": "active"}
-                        for s in api_services
-                    ]
+                    all_services = []
+                    for s in api_services:
+                        is_suspended = s.get("suspended") == "suspended" or s.get("suspended") is True
+                        all_services.append({
+                            "_id": s.get("id", ""),
+                            "service_name": s.get("name", ""),
+                            "status": "suspended" if is_suspended else "active",
+                        })
                 except Exception:
                     all_services = []
 
