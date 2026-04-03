@@ -249,7 +249,7 @@ class RenderMonitorBot:
                 })
             return fallback_list, True
         except Exception:
-            return [], False
+            return [], True
 
     async def setup_bot_commands(self, app: Application):
         """הגדרת תפריט הפקודות בטלגרם (מורץ לאחר אתחול האפליקציה)"""
