@@ -52,14 +52,13 @@ class Database:
 
     @property
     def is_connected(self) -> bool:
-        """בדיקה האם יש חיבור פעיל ל-MongoDB."""
-        if self._connected:
-            return True
+        """בדיקה האם יש חיבור פעיל ל-MongoDB (תמיד בודק בפועל)."""
         try:
             self.client.admin.command("ping")
             self._connected = True
             return True
         except TRANSIENT_DB_ERRORS:
+            self._connected = False
             return False
 
     def wait_for_connection(self, max_wait: int = 300, interval: int = 10) -> bool:
