@@ -932,7 +932,7 @@ class RenderMonitorBot:
 
         message = "📊 *מצב השירותים:*\n\n"
         if is_fallback:
-            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ\\-Render API_\n\n"
+            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ-Render API_\n\n"
 
         for service in services:
             service_id = service["_id"]
@@ -1103,7 +1103,7 @@ class RenderMonitorBot:
 
         message = "🎛️ *ניהול שירותים*\n\n"
         if is_fallback:
-            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ\\-Render API_\n\n"
+            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ-Render API_\n\n"
         message += "🟢 = פעיל | 🔴 = מושעה\n\n"
         message += "בחר שירות לניהול או פעולה כללית:"
 
@@ -1148,7 +1148,7 @@ class RenderMonitorBot:
 
         message = "🎛️ *ניהול שירותים*\n\n"
         if is_fallback:
-            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ\\-Render API_\n\n"
+            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ-Render API_\n\n"
         message += "🟢 = פעיל | 🔴 = מושעה\n\n"
         message += "בחר שירות לניהול או פעולה כללית:"
 
@@ -1372,6 +1372,8 @@ class RenderMonitorBot:
 
         data = query.data
 
+        from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+
         if data.startswith("suspend_"):
             service_id = data.replace("suspend_", "")
 
@@ -1384,7 +1386,7 @@ class RenderMonitorBot:
                 try:
                     self.db.update_service_activity(service_id, status="suspended")
                     self.db.increment_suspend_count(service_id)
-                except Exception:
+                except (ConnectionFailure, ServerSelectionTimeoutError):
                     pass
                 await query.edit_message_text(text=f"✅ השירות {service_id} הושהה.")
             except Exception as e:
@@ -1401,7 +1403,7 @@ class RenderMonitorBot:
                 # עדכון DB — לא חוסם אם מונגו למטה
                 try:
                     self.db.update_service_activity(service_id, status="active")
-                except Exception:
+                except (ConnectionFailure, ServerSelectionTimeoutError):
                     pass
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
                 # התחלת מעקב אקטיבי אחר דיפלוי בעקבות ההפעלה
@@ -1409,7 +1411,7 @@ class RenderMonitorBot:
                     service = self.db.get_service_activity(service_id) or {}
                     service_name = service.get("service_name", service_id)
                     status_monitor.watch_deploy_until_terminal(service_id, service_name)
-                except Exception:
+                except (ConnectionFailure, ServerSelectionTimeoutError):
                     pass
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
@@ -1426,18 +1428,23 @@ class RenderMonitorBot:
         await query.answer()
 
         if query.data == "confirm_suspend_all":
-            # השעיית כל השירותים
+            # השעיית כל השירותים — ללא דדופליקציה כדי לא לדלג על שירותים
+            from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
             suspended_count = 0
-            services, _ = self._get_visible_services_with_fallback()
+            try:
+                all_services = db.get_all_services()
+            except (ConnectionFailure, ServerSelectionTimeoutError):
+                # fallback ל-Render API
+                all_services, _ = self._get_visible_services_with_fallback()
 
-            for service in services:
+            for service in all_services:
                 service_id = service["_id"]
                 if service.get("status") != "suspended":
                     success = render_api.suspend_service(service_id)
                     if success:
                         try:
                             db.update_service_activity(service_id, status="suspended")
-                        except Exception:
+                        except (ConnectionFailure, ServerSelectionTimeoutError):
                             pass
                         suspended_count += 1
 
