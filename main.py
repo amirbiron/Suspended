@@ -1406,15 +1406,16 @@ class RenderMonitorBot:
                 except (ConnectionFailure, ServerSelectionTimeoutError):
                     pass
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
-                # התחלת מעקב אקטיבי אחר דיפלוי בעקבות ההפעלה
-                try:
-                    service = self.db.get_service_activity(service_id) or {}
-                    service_name = service.get("service_name", service_id)
-                    status_monitor.watch_deploy_until_terminal(service_id, service_name)
-                except (ConnectionFailure, ServerSelectionTimeoutError):
-                    pass
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהפעלת {service_id}: {e}")
+                return
+            # התחלת מעקב אקטיבי אחר דיפלוי — best-effort, כבר דיווחנו הצלחה
+            try:
+                service = self.db.get_service_activity(service_id) or {}
+                service_name = service.get("service_name", service_id)
+                status_monitor.watch_deploy_until_terminal(service_id, service_name)
+            except Exception:
+                pass
         elif data == "back_to_manage":  # מטפל בכפתור "חזור"
             # מציג מחדש את תפריט הניהול בעזרת עריכת ההודעה
             await self.show_manage_menu(query)
@@ -1434,8 +1435,15 @@ class RenderMonitorBot:
             try:
                 all_services = db.get_all_services()
             except (ConnectionFailure, ServerSelectionTimeoutError):
-                # fallback ל-Render API
-                all_services, _ = self._get_visible_services_with_fallback()
+                # fallback ישיר ל-Render API (בלי לעבור דרך _get_visible_services שינסה DB שוב)
+                try:
+                    api_services = self.render_api.list_services()
+                    all_services = [
+                        {"_id": s.get("id", ""), "service_name": s.get("name", ""), "status": "active"}
+                        for s in api_services
+                    ]
+                except Exception:
+                    all_services = []
 
             for service in all_services:
                 service_id = service["_id"]
