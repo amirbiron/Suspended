@@ -223,6 +223,35 @@ class RenderMonitorBot:
             return []
         return self._deduplicate_services_by_display_name(services)
 
+    def _get_visible_services_with_fallback(self) -> tuple[List[dict], bool]:
+        """מחזיר רשימת שירותים עם fallback ל-Render API כשמונגו לא זמין.
+
+        מחזיר tuple של (services, is_fallback).
+        """
+        from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+        try:
+            services = self._get_visible_services()
+            if services:
+                return services, False
+        except (ConnectionFailure, ServerSelectionTimeoutError):
+            pass
+
+        # Fallback: שליפה ישירה מ-Render API
+        try:
+            api_services = self.render_api.list_services()
+            fallback_list = []
+            for svc in api_services:
+                svc_id = svc.get("id", "")
+                is_suspended = svc.get("suspended") == "suspended" or svc.get("suspended") is True
+                fallback_list.append({
+                    "_id": svc_id,
+                    "service_name": svc.get("name", svc_id),
+                    "status": "suspended" if is_suspended else "active",
+                })
+            return fallback_list, True
+        except Exception:
+            return [], False
+
     async def setup_bot_commands(self, app: Application):
         """הגדרת תפריט הפקודות בטלגרם (מורץ לאחר אתחול האפליקציה)"""
         from telegram import BotCommand
@@ -894,15 +923,17 @@ class RenderMonitorBot:
         msg = update.message
         if msg is None:
             return
-        services = db.get_all_services()
+        services, is_fallback = self._get_visible_services_with_fallback()
 
-        print(f"נמצאו {len(services)} שירותים במסד הנתונים לבדיקה.")
+        print(f"נמצאו {len(services)} שירותים לבדיקה (fallback={is_fallback}).")
 
         if not services:
             await msg.reply_text("אין שירותים רשומים במערכת")
             return
 
         message = "📊 *מצב השירותים:*\n\n"
+        if is_fallback:
+            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ\\-Render API_\n\n"
 
         for service in services:
             service_id = service["_id"]
@@ -1036,7 +1067,7 @@ class RenderMonitorBot:
         msg = update.message
         if msg is None:
             return
-        services = self._get_visible_services()
+        services, is_fallback = self._get_visible_services_with_fallback()
 
         if not services:
             await msg.reply_text("📭 אין שירותים במערכת")
@@ -1044,8 +1075,9 @@ class RenderMonitorBot:
 
         keyboard = []
 
-        # כפתור לניהול ניטור סטטוס
-        keyboard.append([InlineKeyboardButton("👁️ ניהול ניטור סטטוס", callback_data="go_to_monitor_manage")])
+        # כפתור לניהול ניטור סטטוס (רק אם DB זמין)
+        if not is_fallback:
+            keyboard.append([InlineKeyboardButton("👁️ ניהול ניטור סטטוס", callback_data="go_to_monitor_manage")])
 
         # רשימת שירותים
         for service in services:
@@ -1071,6 +1103,8 @@ class RenderMonitorBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         message = "🎛️ *ניהול שירותים*\n\n"
+        if is_fallback:
+            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ\\-Render API_\n\n"
         message += "🟢 = פעיל | 🔴 = מושעה\n\n"
         message += "בחר שירות לניהול או פעולה כללית:"
 
@@ -1078,7 +1112,7 @@ class RenderMonitorBot:
 
     async def show_manage_menu(self, query: CallbackQuery):
         """מציג את תפריט הניהול בהודעה קיימת (עריכה)"""
-        services = self._get_visible_services()
+        services, is_fallback = self._get_visible_services_with_fallback()
 
         if not services:
             await query.edit_message_text("📭 אין שירותים במערכת")
@@ -1086,8 +1120,9 @@ class RenderMonitorBot:
 
         keyboard = []
 
-        # כפתור לניהול ניטור סטטוס
-        keyboard.append([InlineKeyboardButton("👁️ ניהול ניטור סטטוס", callback_data="go_to_monitor_manage")])
+        # כפתור לניהול ניטור סטטוס (רק אם DB זמין)
+        if not is_fallback:
+            keyboard.append([InlineKeyboardButton("👁️ ניהול ניטור סטטוס", callback_data="go_to_monitor_manage")])
 
         # רשימת שירותים
         for service in services:
@@ -1113,6 +1148,8 @@ class RenderMonitorBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         message = "🎛️ *ניהול שירותים*\n\n"
+        if is_fallback:
+            message += "⚠️ _מסד הנתונים לא זמין — מציג נתונים ישירות מ\\-Render API_\n\n"
         message += "🟢 = פעיל | 🔴 = מושעה\n\n"
         message += "בחר שירות לניהול או פעולה כללית:"
 
@@ -1149,6 +1186,7 @@ class RenderMonitorBot:
         """בודק סטטוס חי מ-Render API ומסנכרן עם הדאטאבייס.
         מחזיר 'suspended' או 'active'.
         """
+        from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
         try:
             loop = asyncio.get_event_loop()
             live_status = await loop.run_in_executor(
@@ -1156,24 +1194,36 @@ class RenderMonitorBot:
             )
             if live_status == "suspended":
                 # עדכון DB רק אם הסטטוס השתנה, כדי לא לדרוס את suspended_at
-                service = self.db.get_service_activity(service_id)
-                if not service or service.get("status") != "suspended":
-                    self.db.update_service_activity(service_id, status="suspended")
+                try:
+                    service = self.db.get_service_activity(service_id)
+                    if not service or service.get("status") != "suspended":
+                        self.db.update_service_activity(service_id, status="suspended")
+                except (ConnectionFailure, ServerSelectionTimeoutError):
+                    pass  # DB לא זמין — מדלגים על סנכרון
                 return "suspended"
             elif live_status in ("unknown", None):
                 # סטטוס לא ברור — fallback לדאטאבייס, לא לדרוס
-                service = self.db.get_service_activity(service_id)
-                return service.get("status", "active") if service else "active"
+                try:
+                    service = self.db.get_service_activity(service_id)
+                    return service.get("status", "active") if service else "active"
+                except (ConnectionFailure, ServerSelectionTimeoutError):
+                    return "active"
             else:
                 # סטטוס ברור שאינו suspended (online, deploying וכו׳) — עדכון DB אם צריך
-                service = self.db.get_service_activity(service_id)
-                if service and service.get("status") == "suspended":
-                    self.db.update_service_activity(service_id, status="active")
+                try:
+                    service = self.db.get_service_activity(service_id)
+                    if service and service.get("status") == "suspended":
+                        self.db.update_service_activity(service_id, status="active")
+                except (ConnectionFailure, ServerSelectionTimeoutError):
+                    pass  # DB לא זמין — מדלגים על סנכרון
                 return "active"
         except Exception:
             # fallback לסטטוס מהדאטאבייס
-            service = self.db.get_service_activity(service_id)
-            return service.get("status", "active") if service else "active"
+            try:
+                service = self.db.get_service_activity(service_id)
+                return service.get("status", "active") if service else "active"
+            except (ConnectionFailure, ServerSelectionTimeoutError):
+                return "active"
 
     def _escape_markdown(self, text: str) -> str:
         """Escape בסיסי כדי למנוע שבירת Markdown בטלגרם."""
@@ -1192,8 +1242,22 @@ class RenderMonitorBot:
 
     async def _show_service_manage_actions_menu(self, query: CallbackQuery, service_id: str) -> None:
         """מציג תפריט פעולות לשירות (השעיה/הפעלה/הסרה) לאחר בחירת שירות."""
-        service = self.db.get_service_activity(service_id)
-        if not service or service.get("removed") is True:
+        from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+        service = None
+        db_available = True
+        try:
+            service = self.db.get_service_activity(service_id)
+        except (ConnectionFailure, ServerSelectionTimeoutError):
+            db_available = False
+
+        if not service:
+            if not db_available:
+                # DB לא זמין — ננסה להמשיך עם מידע מינימלי מ-Render API
+                service = {"_id": service_id, "service_name": service_id}
+            else:
+                await query.edit_message_text("❌ שירות לא נמצא")
+                return
+        elif service.get("removed") is True:
             await query.edit_message_text("❌ שירות לא נמצא")
             return
 
@@ -1317,8 +1381,12 @@ class RenderMonitorBot:
 
             try:
                 self.render_api.suspend_service(service_id)
-                self.db.update_service_activity(service_id, status="suspended")
-                self.db.increment_suspend_count(service_id)
+                # עדכון DB — לא חוסם אם מונגו למטה
+                try:
+                    self.db.update_service_activity(service_id, status="suspended")
+                    self.db.increment_suspend_count(service_id)
+                except Exception:
+                    pass
                 await query.edit_message_text(text=f"✅ השירות {service_id} הושהה.")
             except Exception as e:
                 await query.edit_message_text(text=f"❌ כישלון בהשעיית {service_id}: {e}")
@@ -1331,7 +1399,11 @@ class RenderMonitorBot:
 
             try:
                 self.render_api.resume_service(service_id)
-                self.db.update_service_activity(service_id, status="active")
+                # עדכון DB — לא חוסם אם מונגו למטה
+                try:
+                    self.db.update_service_activity(service_id, status="active")
+                except Exception:
+                    pass
                 await query.edit_message_text(text=f"✅ השירות {service_id} הופעל מחדש.")
                 # התחלת מעקב אקטיבי אחר דיפלוי בעקבות ההפעלה
                 try:
@@ -1357,14 +1429,17 @@ class RenderMonitorBot:
         if query.data == "confirm_suspend_all":
             # השעיית כל השירותים
             suspended_count = 0
-            all_services = db.get_all_services()
+            services, _ = self._get_visible_services_with_fallback()
 
-            for service in all_services:
+            for service in services:
                 service_id = service["_id"]
                 if service.get("status") != "suspended":
                     success = render_api.suspend_service(service_id)
                     if success:
-                        db.update_service_activity(service_id, status="suspended")
+                        try:
+                            db.update_service_activity(service_id, status="suspended")
+                        except Exception:
+                            pass
                         suspended_count += 1
 
             await query.edit_message_text(f"✅ הושעו {suspended_count} שירותים", parse_mode="Markdown")
