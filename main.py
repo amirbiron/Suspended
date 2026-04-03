@@ -231,8 +231,7 @@ class RenderMonitorBot:
         from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
         try:
             services = self._get_visible_services()
-            if services:
-                return services, False
+            return services, False
         except (ConnectionFailure, ServerSelectionTimeoutError):
             pass
 
