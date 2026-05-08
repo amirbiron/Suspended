@@ -2931,8 +2931,8 @@ def run_scheduler():
     # בדיקה יומית בשעה 09:00
     schedule.every().day.at("09:00").do(activity_tracker.check_inactive_services)
 
-    # דוח יומי בשעה 20:00
-    schedule.every().day.at("20:00").do(send_daily_report)
+    # דוח יומי בשעה 20:00 - מבוטל
+    # schedule.every().day.at("20:00").do(send_daily_report)
 
     # בדיקת תזכורות כל דקה
     schedule.every(1).minutes.do(check_and_send_reminders)
